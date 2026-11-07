@@ -1,0 +1,10 @@
+{
+  "block.cms_floodlights.floodlight": "Floodlight",
+  "block.cms_floodlights.stadium_light": "Stadium Light",
+  "cms_floodlights.message.spread": "Beam width: %s",
+  "cms_floodlights.message.aiming": "Use where this light should shine (use the light again to stop)",
+  "cms_floodlights.message.aimed": "Light aimed",
+  "cms_floodlights.message.aim_cancelled": "Stopped aiming",
+  "cms_floodlights.tooltip.beam": "Beam %s · bearing %s · elevation %s",
+  "cms_floodlights.tooltip.redstone": "Redstone: %s (link it to a lighting console to control it from there)"
+}

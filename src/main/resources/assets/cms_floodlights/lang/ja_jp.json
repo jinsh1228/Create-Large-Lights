@@ -1,0 +1,10 @@
+{
+  "block.cms_floodlights.floodlight": "投光器",
+  "block.cms_floodlights.stadium_light": "大型投光器",
+  "cms_floodlights.message.spread": "照射角: %s",
+  "cms_floodlights.message.aiming": "照らしたい場所を右クリック（もう一度この照明を右クリックで中止）",
+  "cms_floodlights.message.aimed": "照明の向きを合わせました",
+  "cms_floodlights.message.aim_cancelled": "向き合わせを中止しました",
+  "cms_floodlights.tooltip.beam": "照射角 %s ・方位 %s ・仰角 %s",
+  "cms_floodlights.tooltip.redstone": "レッドストーン: %s（照明コンソールにリンクするとコンソールから操作できます）"
+}
