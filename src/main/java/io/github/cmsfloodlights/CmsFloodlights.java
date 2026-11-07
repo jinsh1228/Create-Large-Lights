@@ -14,6 +14,8 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.neoforged.bus.api.IEventBus;
+import net.neoforged.fml.ModContainer;
+import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
@@ -46,7 +48,8 @@ public class CmsFloodlights {
             "floodlight", () -> BlockEntityType.Builder.of(FloodlightBlock.Entity::new, FLOODLIGHT.get(),
                     STADIUM_LIGHT.get()).build(null));
 
-    public CmsFloodlights(IEventBus modBus) {
+    public CmsFloodlights(IEventBus modBus, ModContainer container) {
+        container.registerConfig(ModConfig.Type.SERVER, FloodlightConfig.SPEC);
         BLOCKS.register(modBus);
         ITEMS.register(modBus);
         BLOCK_ENTITIES.register(modBus);

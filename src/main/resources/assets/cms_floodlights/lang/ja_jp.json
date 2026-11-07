@@ -2,9 +2,13 @@
   "block.cms_floodlights.floodlight": "投光器",
   "block.cms_floodlights.stadium_light": "大型投光器",
   "cms_floodlights.message.spread": "照射角: %s",
+  "cms_floodlights.message.linked_wrench": "照明制御卓に接続中です。照射角は制御卓で調整してください",
   "cms_floodlights.message.aiming": "照らしたい場所を右クリック（もう一度この照明を右クリックで中止）",
   "cms_floodlights.message.aimed": "照明の向きを合わせました",
   "cms_floodlights.message.aim_cancelled": "向き合わせを中止しました",
-  "cms_floodlights.tooltip.beam": "照射角 %s ・方位 %s ・仰角 %s",
-  "cms_floodlights.tooltip.redstone": "レッドストーン: %s（照明コンソールにリンクするとコンソールから操作できます）"
+  "cms_floodlights.tooltip.console": "照明制御卓で制御中: %s",
+  "cms_floodlights.tooltip.redstone": "レッドストーンで制御中: %s（レンチで照射角を変更）",
+  "cms_floodlights.tooltip.beam": "照射角 %s ・射程 %s",
+  "cms_floodlights.tooltip.aim": "方位 %s ・仰角 %s",
+  "cms_floodlights.tooltip.real_light": "明るさレベル %s ・光源ブロック %s 個"
 }

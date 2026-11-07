@@ -19,6 +19,7 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 
 import io.github.cmsfloodlights.Aim;
 import io.github.cmsfloodlights.FloodlightBlock;
+import io.github.cmsfloodlights.FloodlightConfig;
 import io.github.cmsfloodlights.FloodlightKind;
 
 import net.minecraft.client.Minecraft;
@@ -44,6 +45,8 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
     /** Unlinked, on redstone: a hall's warm white. */
     public static final int WARM_WHITE = 0xFFF1DC;
     private static final int OFF_LENS = 0x1C232D;
+    /** Of the overlay, with real light under it. */
+    private static final float REAL_LIGHT_OVERLAY = 0.4f;
     private static final int EDGES = 16;
     private static final int STEPS = 8;
     private static final Map<FloodlightBlock.Entity, Trace> TRACES = new WeakHashMap<>();
@@ -104,13 +107,14 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
             return;
         }
 
+        // Linked, the console's group sets all of it; unlinked, redstone sets how bright (FloodlightBlock.Entity.beam).
+        FloodlightBlock.Entity.Beam beam = lamp.beam();
+        float strength = beam.strength();
         int color = WARM_WHITE;
-        float strength;
-        LightingConsoleBlock.Entity console = lamp.controller();
+        LightingConsoleBlock.Entity console = beam.console();
         if (console != null) {
-            LightingSettings.Group group = console.settings.groups[lamp.group];
+            LightingSettings.Group group = beam.group();
             double seconds = AnalysisPlayback.apply(console, (level.getGameTime() + (double) partialTick) / 20);
-            strength = console.formed && console.settings.enabled ? console.settings.master * group.brightness : 0;
             boolean signal = level.getGameTime() - console.signalAt < 30;
             if (group.audio && console.hasAudio && signal) {
                 float energy = switch (group.audioBand) {
@@ -127,9 +131,6 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
             if (group.mapping == 3 && !(group.colorMode == 1 && video)) {
                 color = group.colors[Math.floorMod(lamp.individualColor, group.colorCount)];
             }
-        } else {
-            // Linked to a console that isn't here (unloaded): dark till it is. Unlinked: as bright as its signal.
-            strength = lamp.console != null ? 0 : lamp.getBlockState().getValue(FloodlightBlock.POWER) / 15f;
         }
 
         VertexConsumer lens = buffers.getBuffer(LightingRenderer.lensType());
@@ -153,16 +154,25 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         Vec3 direction = vector(local, new Vec3(0, 0, 1)).normalize();
         Vec3 right = vector(local, new Vec3(1, 0, 0)).normalize();
         Vec3 up = vector(local, new Vec3(0, 1, 0)).normalize();
-        double halfAngle = Math.toRadians(lamp.spreadDegrees()) / 2;
+        double halfAngle = Math.toRadians(beam.spread()) / 2;
         LightingRaycast rays = new LightingRaycast(level, lamp.getBlockPos(), true);
         Trace trace = TRACES.computeIfAbsent(lamp, ignored -> new Trace());
-        trace.update(lamp, rays, origin, direction, right, up, Math.tan(halfAngle), kind.range);
+        trace.update(lamp, rays, origin, direction, right, up, Math.tan(halfAngle), beam.range());
         MultiBufferSource effects = LightingRenderer.beamBuffers(level, buffers);
-        LightingIllumination.render(lamp, origin, direction, halfAngle, kind.range, strength * kind.intensity, color,
+        LightingIllumination.render(lamp, origin, direction, halfAngle, beam.range(), strength * overlay(kind), color,
                 trace.center,
                 rays, model, effects, kind.radius);
         cone(effects.getBuffer(LightingRenderer.beamType()), model, trace, origin, right, up,
                 stadium ? 0.85f : 0.36f, stadium ? 0.55f : 0.36f, color, strength * kind.haze);
+    }
+
+    /**
+     * How strongly the beam is laid over what it falls on. With real light (RealLight; the server's config reaches
+     * the client) the world is already lit there, so the overlay only shows the beam's colour and shape.
+     */
+    private static float overlay(FloodlightKind kind) {
+        boolean real = FloodlightConfig.SPEC.isLoaded() && FloodlightConfig.REAL_LIGHT.get();
+        return kind.intensity * (real ? REAL_LIGHT_OVERLAY : 1);
     }
 
     /** Where the beam's middle and edges meet blocks, traced again only when something that matters changed. */

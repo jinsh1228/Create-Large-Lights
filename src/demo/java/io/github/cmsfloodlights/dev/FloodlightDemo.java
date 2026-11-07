@@ -105,21 +105,167 @@ public final class FloodlightDemo {
             server.execute(() -> build(server.overworld()));
         } else if (ticks == 60) {
             server.execute(() -> view(server, new Vec3(-27.5, FLOOR + 12, -27.5), new Vec3(0, FLOOR, 0)));
+        } else if (ticks == 400) {
+            server.execute(() -> checkUnlinked(server.overworld()));
         } else if (ticks == 600) {
             shot(mc, "1_floodlights_on.png");
             server.execute(() -> power(server.overworld(), false));
         } else if (ticks == 700) {
             shot(mc, "2_floodlights_off.png");
             server.execute(() -> {
+                checkOff(server.overworld());
                 power(server.overworld(), true);
                 view(server, new Vec3(0.5, FLOOR + 2.6, -26.5), new Vec3(0.5, FLOOR + 1, 10));
             });
         } else if (ticks == 1100) {
             shot(mc, "3_floor_view.png");
-        } else if (ticks == 1140) {
-            LogUtils.getLogger().info("Floodlight demo done");
+            server.execute(() -> console(server.overworld()));
+        } else if (ticks == 1180) {
+            server.execute(() -> link(server.overworld()));
+        } else if (ticks == 1300) {
+            server.execute(() -> checkLinked(server));
+        } else if (ticks == 1500) {
+            shot(mc, "4_console_linked.png");
+        } else if (ticks == 1540) {
+            LogUtils.getLogger().info("Floodlight demo done: {} checks failed", failures);
             mc.stop();
         }
+    }
+
+    private static int failures;
+    private static final BlockPos CENTER_LIGHT = new BlockPos(0, CEILING - 1, 0);
+    private static final BlockPos CORNER_LIGHT = new BlockPos(16, CEILING - 1, 16);
+    /** The console's first column, front row: it faces north, its columns run west, its back row south. */
+    private static final BlockPos CONSOLE = new BlockPos(6, FLOOR + 1, 24);
+
+    private static void check(boolean passed, String what, Object... args) {
+        if (!passed) {
+            failures++;
+        }
+        Object[] all = new Object[args.length + 1];
+        all[0] = passed ? "PASS" : "FAIL";
+        System.arraycopy(args, 0, all, 1, args.length);
+        LogUtils.getLogger().info("Floodlight demo CHECK {}: " + what, all);
+    }
+
+    private static int blockLight(ServerLevel level, int x, int z) {
+        return level.getBrightness(net.minecraft.world.level.LightLayer.BLOCK, new BlockPos(x, FLOOR + 1, z));
+    }
+
+    private static int lightBlocksInHall(ServerLevel level) {
+        int count = 0;
+        for (BlockPos pos : BlockPos.betweenClosed(-HALF, FLOOR + 1, -HALF, HALF, CEILING - 1, HALF)) {
+            if (level.getBlockState(pos).is(Blocks.LIGHT)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private static FloodlightBlock.Entity fixture(ServerLevel level, BlockPos pos) {
+        return (FloodlightBlock.Entity) level.getBlockEntity(pos);
+    }
+
+    private static void wrench(ServerLevel level, BlockPos pos) {
+        ServerPlayer player = level.getServer().getPlayerList().getPlayers().getFirst();
+        var state = level.getBlockState(pos);
+        ((FloodlightBlock) state.getBlock()).onWrenched(state, new net.minecraft.world.item.context.UseOnContext(player,
+                net.minecraft.world.InteractionHand.MAIN_HAND,
+                new net.minecraft.world.phys.BlockHitResult(Vec3.atCenterOf(pos), Direction.DOWN, pos, false)));
+    }
+
+    private static void checkUnlinked(ServerLevel level) {
+        int[][] spots = {{0, 0}, {8, 8}, {16, 16}, {-20, -20}, {-27, 27}};
+        for (int[] spot : spots) {
+            int light = blockLight(level, spot[0], spot[1]);
+            check(light >= 10, "floor block light at ({}, {}) is {}, vanilla's lamps reach none of it", spot[0], spot[1],
+                    light);
+        }
+        int placed = lightBlocksInHall(level);
+        check(placed > 20, "{} light blocks placed in the hall", placed);
+        FloodlightBlock.Entity corner = fixture(level, CORNER_LIGHT);
+        check(corner.beam().strength() == 1 && corner.beam().console() == null,
+                "unlinked, on a redstone block: strength {}", corner.beam().strength());
+        float before = corner.beam().spread();
+        float[] seen = new float[4];
+        for (int i = 0; i < 4; i++) {
+            wrench(level, CORNER_LIGHT);
+            seen[i] = corner.beam().spread();
+        }
+        check(seen[0] != before && seen[3] == before, "the wrench steps the beam width: {} -> {}",
+                before, java.util.Arrays.toString(seen));
+    }
+
+    private static void checkOff(ServerLevel level) {
+        // Light blocks follow the next look (RealLight.CHECK ticks), well within the 100 ticks since.
+        int placed = lightBlocksInHall(level);
+        check(placed == 0, "with the redstone gone, {} light blocks are left", placed);
+        int light = blockLight(level, 0, 0);
+        check(light == 0, "with the redstone gone, the floor's block light is {}", light);
+    }
+
+    private static void console(ServerLevel level) {
+        var consoleBlock = org.haruyq.createmediasystems.CreateMediaSystems.LIGHTING_CONSOLE.get();
+        var monitorBlock = org.haruyq.createmediasystems.CreateMediaSystems.LIGHTING_MONITOR.get();
+        for (int x = 0; x < 4; x++) {
+            for (int z = 0; z < 2; z++) {
+                level.setBlock(org.haruyq.createmediasystems.lighting.LightingConsoleBlock.at(CONSOLE, Direction.NORTH, x, 0, z),
+                        consoleBlock.defaultBlockState().setValue(
+                                org.haruyq.createmediasystems.lighting.LightingConsoleBlock.FACING, Direction.NORTH),
+                        Block.UPDATE_ALL);
+            }
+            level.setBlock(org.haruyq.createmediasystems.lighting.LightingConsoleBlock.at(CONSOLE, Direction.NORTH, x, 1, 1),
+                    monitorBlock.defaultBlockState().setValue(
+                            org.haruyq.createmediasystems.lighting.LightingMonitorBlock.FACING, Direction.NORTH),
+                    Block.UPDATE_ALL);
+        }
+    }
+
+    private static void link(ServerLevel level) {
+        var console = org.haruyq.createmediasystems.lighting.LightingConsoleBlock.find(level, CONSOLE);
+        check(console != null && console.formed, "the lighting console formed");
+        if (console == null) {
+            return;
+        }
+        console = console.controller();
+        FloodlightBlock.Entity center = fixture(level, CENTER_LIGHT);
+        check(console.bind(center, 0), "the centre floodlight linked to the console's group 1");
+        var group = console.settings.groups[0];
+        console.settings.master = 1;
+        group.brightness = 0.4f;
+        group.spread = 18;
+        group.range = 120;
+        group.colorCount = 1;
+        group.colors[0] = 0xFF3040;
+        group.colorCycle = false;
+        group.audio = false;
+        console.changed();
+    }
+
+    private static void checkLinked(net.minecraft.server.MinecraftServer server) {
+        ServerLevel level = server.overworld();
+        FloodlightBlock.Entity center = fixture(level, CENTER_LIGHT);
+        var beam = center.beam();
+        check(beam.console() != null, "the centre floodlight is run by the console");
+        check(Math.abs(beam.strength() - 0.4f) < 1e-4, "brightness from the console: {}", beam.strength());
+        check(beam.spread() == 18, "beam width from the console: {}", beam.spread());
+        check(beam.range() == 120, "reach from the console: {}", beam.range());
+        int expected = io.github.cmsfloodlights.RealLight.lightLevel(0.4f);
+        long[] lights = center.lightBlocks();
+        // Neighbouring floodlights may already hold the cells under it (each cell has one owner): the count may be 0.
+        boolean levels = true;
+        for (long packed : lights) {
+            var state = level.getBlockState(BlockPos.of(packed));
+            levels &= state.is(Blocks.LIGHT) && state.getValue(net.minecraft.world.level.block.LightBlock.LEVEL) == expected;
+        }
+        check(levels, "its {} light blocks are all at level {}, as the console's brightness", lights.length, expected);
+        float spread = center.beam().spread();
+        wrench(level, CENTER_LIGHT);
+        check(center.beam().spread() == spread, "the wrench leaves a linked floodlight's beam width to the console");
+        // Left off for the last shot: the unlinked floodlights go dark, the linked one shines on in the console's red.
+        power(level, false);
+        check(center.beam().strength() > 0, "a linked floodlight ignores redstone");
+        view(server, new Vec3(-14.5, FLOOR + 14, -14.5), new Vec3(0.5, FLOOR, 0.5));
     }
 
     private static void shot(Minecraft mc, String name) {
