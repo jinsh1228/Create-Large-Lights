@@ -60,7 +60,7 @@ if (providers.gradleProperty('demo').isPresent()) {
     sourceSets.main.java.srcDir('src/demo/java')
     neoForge.runs.client {
         gameDirectory = file('run-demo')
-        systemProperty 'cmsFloodlights.demo', 'true'
+        systemProperty 'createLargeLights.demo', 'true'
         programArguments.addAll('--width', '1280', '--height', '720')
     }
 }

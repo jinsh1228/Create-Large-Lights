@@ -1,0 +1,14 @@
+{
+  "block.create_large_lights.floodlight": "Floodlight",
+  "block.create_large_lights.stadium_light": "Stadium Light",
+  "create_large_lights.message.spread": "Beam width: %s",
+  "create_large_lights.message.linked_wrench": "Linked to a lighting console: set its beam width there",
+  "create_large_lights.message.aiming": "Use where this light should shine (use the light again to stop)",
+  "create_large_lights.message.aimed": "Light aimed",
+  "create_large_lights.message.aim_cancelled": "Stopped aiming",
+  "create_large_lights.tooltip.console": "Run by the lighting console: %s",
+  "create_large_lights.tooltip.redstone": "Run by redstone: %s (wrench: beam width)",
+  "create_large_lights.tooltip.beam": "Beam %s · reach %s",
+  "create_large_lights.tooltip.aim": "Bearing %s · elevation %s",
+  "create_large_lights.tooltip.real_light": "Light level %s · %s light blocks"
+}

@@ -1,0 +1,27 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "pattern": [
+    "SGS",
+    "SLS",
+    " A "
+  ],
+  "key": {
+    "S": {
+      "item": "create:iron_sheet"
+    },
+    "G": {
+      "item": "minecraft:glass_pane"
+    },
+    "L": {
+      "item": "minecraft:redstone_lamp"
+    },
+    "A": {
+      "item": "create:andesite_alloy"
+    }
+  },
+  "result": {
+    "id": "create_large_lights:floodlight",
+    "count": 1
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "block.create_large_lights.floodlight": "投光器",
+  "block.create_large_lights.stadium_light": "大型投光器",
+  "create_large_lights.message.spread": "照射角: %s",
+  "create_large_lights.message.linked_wrench": "照明制御卓に接続中です。照射角は制御卓で調整してください",
+  "create_large_lights.message.aiming": "照らしたい場所を右クリック（もう一度この照明を右クリックで中止）",
+  "create_large_lights.message.aimed": "照明の向きを合わせました",
+  "create_large_lights.message.aim_cancelled": "向き合わせを中止しました",
+  "create_large_lights.tooltip.console": "照明制御卓で制御中: %s",
+  "create_large_lights.tooltip.redstone": "レッドストーンで制御中: %s（レンチで照射角を変更）",
+  "create_large_lights.tooltip.beam": "照射角 %s ・射程 %s",
+  "create_large_lights.tooltip.aim": "方位 %s ・仰角 %s",
+  "create_large_lights.tooltip.real_light": "明るさレベル %s ・光源ブロック %s 個"
+}

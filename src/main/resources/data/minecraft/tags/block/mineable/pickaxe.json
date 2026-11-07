@@ -1,6 +1,6 @@
 {
   "values": [
-    "cms_floodlights:floodlight",
-    "cms_floodlights:stadium_light"
+    "create_large_lights:floodlight",
+    "create_large_lights:stadium_light"
   ]
 }

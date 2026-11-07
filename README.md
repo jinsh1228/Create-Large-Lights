@@ -1,4 +1,4 @@
-# Create: Media Systems Floodlights
+# Create: Large Lights
 
 体育館・アリーナ・スタジアム向けの「投光器」を追加する [Create: Media Systems](https://github.com/haruyq/Create-Media-Systems) のアドオンです。
 
@@ -53,7 +53,7 @@ CMSのライティングリンクで制御卓にリンクすると、レッド�
 
 - 消灯・向きの変更・照射角の変更・投光器の破壊で、置いた光源は自動で取り除かれます。
 - 置くのは空気と水源の中だけで、他のブロックを壊したり、自分が置いていない光源ブロックを消したりはしません。
-- ワールドごとの設定 `serverconfig/cms_floodlights-server.toml` で無効化（`realLight = false`）、間隔（`lightSpacing`、既定5）、1台あたりの上限（`maxLightsPerFixture`、既定256）を変えられます。
+- ワールドごとの設定 `serverconfig/create_large_lights-server.toml` で無効化（`realLight = false`）、間隔（`lightSpacing`、既定5）、1台あたりの上限（`maxLightsPerFixture`、既定256）を変えられます。
 - 動くSable構造物の上の投光器は、実際の明るさを出しません（光源ブロックが取り残されるため）。
 
 ## 必要なもの
