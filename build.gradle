@@ -55,6 +55,16 @@ neoForge {
     }
 }
 
+// A world with a hall lit by floodlights, built and photographed by itself (src/demo): -Pdemo, then runClient.
+if (providers.gradleProperty('demo').isPresent()) {
+    sourceSets.main.java.srcDir('src/demo/java')
+    neoForge.runs.client {
+        gameDirectory = file('run-demo')
+        systemProperty 'cmsFloodlights.demo', 'true'
+        programArguments.addAll('--width', '1280', '--height', '720')
+    }
+}
+
 configurations {
     runtimeClasspath.extendsFrom localRuntime
 }

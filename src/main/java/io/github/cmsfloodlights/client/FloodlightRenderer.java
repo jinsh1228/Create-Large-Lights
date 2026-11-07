@@ -158,7 +158,8 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         Trace trace = TRACES.computeIfAbsent(lamp, ignored -> new Trace());
         trace.update(lamp, rays, origin, direction, right, up, Math.tan(halfAngle), kind.range);
         MultiBufferSource effects = LightingRenderer.beamBuffers(level, buffers);
-        LightingIllumination.render(lamp, origin, direction, halfAngle, kind.range, strength, color, trace.center,
+        LightingIllumination.render(lamp, origin, direction, halfAngle, kind.range, strength * kind.intensity, color,
+                trace.center,
                 rays, model, effects, kind.radius);
         cone(effects.getBuffer(LightingRenderer.beamType()), model, trace, origin, right, up,
                 stadium ? 0.85f : 0.36f, stadium ? 0.55f : 0.36f, color, strength * kind.haze);

@@ -5,21 +5,27 @@ package io.github.cmsfloodlights;
  * reaches, and how far across the surface it falls on its light is laid (LightingIllumination.render's maxRadius).
  */
 public enum FloodlightKind {
-    FLOODLIGHT(new float[]{20, 35, 50, 70}, 1, 128, 24, 9),
-    STADIUM_LIGHT(new float[]{25, 40, 60, 80}, 2, 256, 48, 12);
+    FLOODLIGHT(new float[]{20, 35, 50, 70}, 1, 128, 24, 0.3f, 9),
+    STADIUM_LIGHT(new float[]{25, 40, 60, 80}, 2, 256, 48, 0.4f, 12);
 
     final float[] spreads;
     final int defaultSpread;
     public final float range;
     public final int radius;
+    /**
+     * How strongly it lights what it falls on, of a stage light's: one stage light alone already lights a face fully,
+     * and a hall's floodlights overlap, adding up.
+     */
+    public final float intensity;
     /** How strongly the beam shows in the air, out of 255 at full strength. */
     public final float haze;
 
-    FloodlightKind(float[] spreads, int defaultSpread, float range, int radius, float haze) {
+    FloodlightKind(float[] spreads, int defaultSpread, float range, int radius, float intensity, float haze) {
         this.spreads = spreads;
         this.defaultSpread = defaultSpread;
         this.range = range;
         this.radius = radius;
+        this.intensity = intensity;
         this.haze = haze;
     }
 

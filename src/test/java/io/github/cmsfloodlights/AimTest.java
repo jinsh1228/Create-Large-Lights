@@ -7,10 +7,11 @@ import org.junit.jupiter.api.Test;
 import net.minecraft.world.phys.Vec3;
 
 class AimTest {
+    /** Vec3.directionFromRotation uses Mth's sine table, good to about 1e-4. */
     private static void assertClose(Vec3 expected, Vec3 actual) {
-        assertEquals(expected.x, actual.x, 1e-5, "x");
-        assertEquals(expected.y, actual.y, 1e-5, "y");
-        assertEquals(expected.z, actual.z, 1e-5, "z");
+        assertEquals(expected.x, actual.x, 1e-3, "x");
+        assertEquals(expected.y, actual.y, 1e-3, "y");
+        assertEquals(expected.z, actual.z, 1e-3, "z");
     }
 
     @Test

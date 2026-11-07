@@ -6,6 +6,10 @@
 このmodの投光器は、CMSのステージライトと同じ照射処理（ビームが当たったブロック面にシェーダーで光を重ねる）を使い、
 **最大256ブロック先**まで届き、**最大で直径約100ブロック**の床を照らします。
 
+![投光器で照らした体育館（床から天井まで28ブロック）](docs/1_floodlights_on.png)
+
+消灯時（バニラの光は届かない）: [docs/2_floodlights_off.png](docs/2_floodlights_off.png) ・ 床からの眺め: [docs/3_floor_view.png](docs/3_floor_view.png)
+
 ## ブロック
 
 | ブロック | 射程 | 照射角 | 照らす範囲（当たった面の中心から） |
@@ -36,6 +40,12 @@ CMSのソースをこのフォルダの隣（`../Create-Media-Systems`）に置�
 
 ```bash
 ./gradlew build
+```
+
+デモ（体育館を自動で作って撮影し、終了します。スクリーンショットは `run-demo/screenshots/`）:
+
+```bash
+./gradlew -Pdemo runClient
 ```
 
 CMSの変更がリリースされたら、`gradle.properties` の `cms_version_range` をそのバージョンに上げてください。
