@@ -61,13 +61,13 @@ CMSのライティングリンクで制御卓にリンクすると、レッド�
 - Minecraft 1.21.1 / NeoForge 21.1
 - Create 6.0.10 以降
 - Create: Media Systems（外部の照明器具を登録できるAPIを含む版）
-  - まだCMS本体に取り込まれていないため、変更をパッチとして [docs/cms-fixture-api.patch](docs/cms-fixture-api.patch) に同梱しています。
-    CMSのソースに `git am docs/cms-fixture-api.patch` で適用してからビルドしてください。
+  - このAPIは [haruyq/Create-Media-Systems#2](https://github.com/haruyq/Create-Media-Systems/pull/2) でCMSの `master` に取り込まれました。
+    1.1.0 より後のリリースに入る予定で、それまではCMSの `master` をビルドしたものを使ってください。
 - Java 21
 
 ## ビルド
 
-CMSのソースをこのフォルダの隣（`../Create-Media-Systems`）に置き、composite buildとして一緒にビルドします。
+CMSのソース（`master`）をこのフォルダの隣（`../Create-Media-Systems`）に置き、composite buildとして一緒にビルドします。
 別の場所にある場合は `-PcmsPath=<パス>` を付けてください。
 
 ```bash
