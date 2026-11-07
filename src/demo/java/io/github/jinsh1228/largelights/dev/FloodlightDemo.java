@@ -339,6 +339,29 @@ public final class FloodlightDemo {
         check(other == null, "and its own page for a group without one");
     }
 
+    /** One family to a group: a stage light and a floodlight never share one, so each group shows one page. */
+    private static void checkFamilies(ServerLevel level) {
+        var console = consoleAt(level);
+        BlockPos stagePos = new BlockPos(-6, FLOOR + 1, 20);
+        level.setBlock(stagePos, org.haruyq.createmediasystems.CreateMediaSystems.STAGE_LIGHT.get().defaultBlockState(),
+                Block.UPDATE_ALL);
+        var stage = (org.haruyq.createmediasystems.lighting.StageLightBlock.Entity) level.getBlockEntity(stagePos);
+        FloodlightBlock.Entity corner = fixture(level, CORNER_LIGHT);
+        check("create_large_lights".equals(console.family(0)), "group 1 is the floodlights': {}", console.family(0));
+        check(!console.accepts(stage, 0) && !console.bind(stage, 0) && stage.console == null,
+                "a stage light can't join the floodlights' group");
+        check(console.bind(stage, 1) && "create_media_systems".equals(console.family(1)),
+                "it joins an empty group, which becomes the stage lights': {}", console.family(1));
+        check(!console.bind(corner, 1) && corner.console == null, "a floodlight can't join the stage lights' group");
+        check(console.bind(corner, 2), "and joins another empty group");
+        // Moving a linked fixture (as scrolling it does) is held to the same rule.
+        check(!console.bind(corner, 1) && corner.group == 2, "moving it into the stage lights' group is refused");
+        corner.unlink();
+        stage.unlink();
+        level.removeBlock(stagePos, false);
+        check(console.family(1) == null && console.family(2) == null, "emptied, groups take any family again");
+    }
+
     private static void checkLinked(net.minecraft.server.MinecraftServer server) {
         ServerLevel level = server.overworld();
         FloodlightBlock.Entity center = fixture(level, CENTER_LIGHT);
@@ -370,6 +393,7 @@ public final class FloodlightDemo {
         wrench(level, CENTER_LIGHT);
         check(center.beam().spread() == spread, "the wrench leaves a linked floodlight's beam width to the console");
         check(center.beam().strength() > 0, "a linked floodlight ignores redstone");
+        checkFamilies(level);
         view(server, new Vec3(-14.5, FLOOR + 14, -14.5), new Vec3(0.5, FLOOR, 0.5));
     }
 

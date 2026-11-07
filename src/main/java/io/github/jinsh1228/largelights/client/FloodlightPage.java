@@ -6,6 +6,10 @@ import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
 import org.haruyq.createmediasystems.lighting.LightingConsolePage;
 import org.haruyq.createmediasystems.lighting.LightingConsoleSurface;
 import org.haruyq.createmediasystems.lighting.LightingPackets;
+import org.haruyq.createmediasystems.lighting.LightingRenderer;
+import org.joml.Matrix4f;
+
+import com.mojang.blaze3d.vertex.VertexConsumer;
 import org.haruyq.createmediasystems.lighting.LightingSettings;
 import org.haruyq.createmediasystems.lighting.LightingText;
 import org.jetbrains.annotations.Nullable;
@@ -13,6 +17,7 @@ import org.jetbrains.annotations.Nullable;
 import io.github.jinsh1228.largelights.Aim;
 import io.github.jinsh1228.largelights.ConsolePacket;
 import io.github.jinsh1228.largelights.ConsoleSettings;
+import io.github.jinsh1228.largelights.CreateLargeLights;
 import io.github.jinsh1228.largelights.FloodlightBlock;
 
 import net.minecraft.client.Minecraft;
@@ -42,12 +47,7 @@ public final class FloodlightPage implements LightingConsolePage {
     private static LightingConsoleBlock.Entity saving;
 
     public static void register() {
-        LightingConsolePage.register(new FloodlightPage());
-    }
-
-    @Override
-    public boolean active(LightingConsoleBlock.Entity console) {
-        return fixtures(console)[0] > 0;
+        LightingConsolePage.register(CreateLargeLights.MOD_ID, new FloodlightPage());
     }
 
     /** The selected group's floodlights here, and the light blocks they keep. */
@@ -216,6 +216,8 @@ public final class FloodlightPage implements LightingConsolePage {
         surface.panel(x - 0.07f, z - 0.009f, x + 0.07f, z + 0.009f, 0x7DEBFF);
         surface.panel(x - 0.009f, z - 0.07f, x + 0.009f, z + 0.07f, 0x7DEBFF);
         float spread = ConsoleSettings.spread(console, g);
+        // The beam's width, as a ring round the aim: wider beam, wider ring.
+        ring(surface, x, z, 0.035f + spread / ConsoleSettings.MAX_SPREAD * 0.13f, 0.008f, 0x7DEBFF);
         int level = ConsoleSettings.maxLevel(console, g);
         boolean real = ConsoleSettings.realLight(console, g);
         float[] values = {(group.range - 2) / (LightingSettings.MAX_RANGE - 2), (spread - 1) / (ConsoleSettings.MAX_SPREAD - 1),
@@ -240,6 +242,30 @@ public final class FloodlightPage implements LightingConsolePage {
         surface.monitorText(3.08f, rowTop(MOTION_ROW) - 0.015f, text("motion_now",
                 LightingText.mode("motion", group.motion)), 0.84f);
         surface.monitorText(3.08f, rowTop(TARGET_ROW) - 0.015f, text("target_now", target(console)), 0.84f);
+    }
+
+    /** A ring on the deck round ({@code x}, {@code z}), drawn with the surface's own pose and buffers. */
+    private static void ring(LightingConsoleSurface surface, float x, float z, float radius, float width, int color) {
+        Matrix4f pose = surface.pose();
+        VertexConsumer out = surface.buffers().getBuffer(LightingRenderer.lensType());
+        int segments = 32;
+        for (int i = 0; i < segments; i++) {
+            double a0 = Math.PI * 2 * i / segments;
+            double a1 = Math.PI * 2 * (i + 1) / segments;
+            ringVertex(surface, out, pose, x, z, radius, a0, color);
+            ringVertex(surface, out, pose, x, z, radius, a1, color);
+            ringVertex(surface, out, pose, x, z, radius - width, a1, color);
+            ringVertex(surface, out, pose, x, z, radius - width, a0, color);
+        }
+    }
+
+    private static void ringVertex(LightingConsoleSurface surface, VertexConsumer out, Matrix4f pose, float x, float z,
+                                   float radius, double angle, int color) {
+        float px = x + (float) Math.cos(angle) * radius;
+        float pz = z + (float) Math.sin(angle) * radius;
+        // Just over the aim pad, which lies on the deck as a panel does.
+        out.addVertex(pose, px, surface.height(pz) + 0.0765f, pz)
+                .setColor(color >> 16 & 255, color >> 8 & 255, color & 255, 255);
     }
 
     private static String signed(float degrees) {

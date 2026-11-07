@@ -248,6 +248,12 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
             return lights.toLongArray();
         }
 
+        /** Floodlights share the console's floodlight page (client.FloodlightPage), so a group holds only them. */
+        @Override
+        public String family() {
+            return CreateLargeLights.MOD_ID;
+        }
+
         @Override
         public Component fixtureName() {
             return getBlockState().getBlock().getName();
