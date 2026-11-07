@@ -15,5 +15,6 @@ public class CreateLargeLightsClient {
                 event.registerBlockEntityRenderer(CreateLargeLights.FLOODLIGHT_ENTITY.get(), FloodlightRenderer::new));
         NeoForge.EVENT_BUS.addListener(FloodlightAiming::onInteract);
         NeoForge.EVENT_BUS.addListener(FloodlightAiming::tick);
+        FloodlightPage.register();
     }
 }

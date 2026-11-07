@@ -80,7 +80,8 @@ public final class RealLight {
         Vec3 center = Vec3.atCenterOf(pos);
         // On a moving Sable structure the beam sweeps the world: light blocks would trail behind it.
         boolean carried = !SableCompat.toWorld(level, pos, center).equals(center);
-        int brightness = FloodlightConfig.REAL_LIGHT.get() && !carried ? lightLevel(beam.strength()) : 0;
+        int brightness = FloodlightConfig.REAL_LIGHT.get() && !carried
+                ? Math.min(lightLevel(beam.strength()), beam.lightLimit()) : 0;
         int spacing = FloodlightConfig.SPACING.get();
         // The aim with the console's pan and tilt; a group's motion moves the beam, not the light blocks.
         int signature = Objects.hash(brightness, beam.yaw(), beam.pitch(), beam.spread(), beam.range(), spacing,

@@ -214,7 +214,7 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
          * they are its own aim turned by the group's pan and tilt.
          */
         public record Beam(@Nullable LightingConsoleBlock.Entity console, @Nullable LightingSettings.Group group,
-                           float strength, float spread, float range, float yaw, float pitch) {
+                           float strength, float spread, float range, float yaw, float pitch, int lightLimit) {
         }
 
         public Beam beam() {
@@ -223,12 +223,15 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
                 LightingSettings.Group settings = owner.settings.groups[group];
                 float strength = owner.formed && owner.settings.enabled ? owner.settings.master * settings.brightness : 0;
                 float[] aim = Aim.offset(yaw, pitch, settings.pan, settings.tilt);
-                return new Beam(owner, settings, Mth.clamp(strength, 0, 1), Mth.clamp(settings.spread, 1, kind().maxSpread()),
-                        Mth.clamp(settings.range, 2, LightingSettings.MAX_RANGE), aim[0], aim[1]);
+                // Beam width and real light are the floodlight page's (ConsoleSettings): a stage light's spread stops at 70°.
+                return new Beam(owner, settings, Mth.clamp(strength, 0, 1),
+                        Mth.clamp(ConsoleSettings.spread(owner, group), 1, kind().maxSpread()),
+                        Mth.clamp(settings.range, 2, LightingSettings.MAX_RANGE), aim[0], aim[1],
+                        ConsoleSettings.lightLimit(owner, group));
             }
             // Linked to a console that isn't here (unloaded): dark till it is.
             float strength = console != null ? 0 : getBlockState().getValue(POWER) / 15f;
-            return new Beam(null, null, strength, spreadDegrees(), kind().range, yaw, pitch);
+            return new Beam(null, null, strength, spreadDegrees(), kind().range, yaw, pitch, 15);
         }
 
         public void aim(float yaw, float pitch) {
@@ -265,7 +268,7 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
                     LightingText.number(Math.floorMod(Math.round(beam.yaw() + 180), 360) + "°"),
                     LightingText.number(Math.round(-beam.pitch()) + "°")).withColor(LightingText.TEXT));
             tooltip.add(Component.translatable("create_large_lights.tooltip.real_light",
-                    LightingText.number(RealLight.lightLevel(beam.strength())),
+                    LightingText.number(Math.min(RealLight.lightLevel(beam.strength()), beam.lightLimit())),
                     LightingText.number(lights.size())).withColor(LightingText.TEXT));
             return true;
         }

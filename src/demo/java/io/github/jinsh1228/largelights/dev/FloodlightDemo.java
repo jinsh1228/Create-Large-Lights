@@ -126,7 +126,22 @@ public final class FloodlightDemo {
             server.execute(() -> checkLinked(server));
         } else if (ticks == 1500) {
             shot(mc, "4_console_linked.png");
-        } else if (ticks == 1540) {
+        } else if (ticks == 1520) {
+            server.execute(() -> pageSettings(server.overworld()));
+        } else if (ticks == 1580) {
+            server.execute(() -> checkPageSettings(server.overworld()));
+        } else if (ticks == 1620) {
+            server.execute(() -> checkRealLightOff(server.overworld()));
+        } else if (ticks == 1630) {
+            server.execute(() -> checkFadeMidway(server.overworld()));
+        } else if (ticks == 1680) {
+            server.execute(() -> checkFadeDone(server.overworld()));
+        } else if (ticks == 1700) {
+            checkPageShows(mc);
+            server.execute(() -> view(server, new Vec3(4.5, FLOOR + 2.55, 22.45), new Vec3(4.5, FLOOR + 1.55, 25)));
+        } else if (ticks == 1800) {
+            shot(mc, "5_console_page.png");
+        } else if (ticks == 1840) {
             LogUtils.getLogger().info("Floodlight demo done: {} checks failed", failures);
             mc.stop();
         }
@@ -235,7 +250,9 @@ public final class FloodlightDemo {
         var group = console.settings.groups[0];
         console.settings.master = 1;
         group.brightness = 0.4f;
-        group.spread = 18;
+        // A linked floodlight's beam width is the floodlight page's, not the group's stage-light spread.
+        io.github.jinsh1228.largelights.ConsolePacket.apply(console, new io.github.jinsh1228.largelights.ConsolePacket(
+                console.getBlockPos(), 0, io.github.jinsh1228.largelights.ConsolePacket.Action.SPREAD, 0, 18));
         group.range = 120;
         group.colorCount = 1;
         group.colors[0] = 0xFF3040;
@@ -247,13 +264,88 @@ public final class FloodlightDemo {
         console.changed();
     }
 
+    private static org.haruyq.createmediasystems.lighting.LightingConsoleBlock.Entity consoleAt(ServerLevel level) {
+        return org.haruyq.createmediasystems.lighting.LightingConsoleBlock.find(level, CONSOLE);
+    }
+
+    private static void page(ServerLevel level, io.github.jinsh1228.largelights.ConsolePacket.Action action, int index,
+                             float value) {
+        var console = consoleAt(level);
+        io.github.jinsh1228.largelights.ConsolePacket.apply(console,
+                new io.github.jinsh1228.largelights.ConsolePacket(console.getBlockPos(), 0, action, index, value));
+        console.changed();
+    }
+
+    /** As the floodlight page's knobs set them: width past a floodlight's 70°, the light level held to 8. */
+    private static void pageSettings(ServerLevel level) {
+        var console = consoleAt(level);
+        console.settings.groups[0].brightness = 1;
+        page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.SPREAD, 0, 80);
+        page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.MAX_LEVEL, 0, 8);
+        page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.FADE, 0, 1.5f);
+    }
+
+    private static void checkPageSettings(ServerLevel level) {
+        FloodlightBlock.Entity center = fixture(level, CENTER_LIGHT);
+        var beam = center.beam();
+        check(beam.spread() == 70, "the page's 80° beam width stops at a floodlight's 70°: {}", beam.spread());
+        check(beam.lightLimit() == 8, "the page holds its real light to level {}", beam.lightLimit());
+        long[] lights = center.lightBlocks();
+        boolean levels = lights.length > 0;
+        for (long packed : lights) {
+            var state = level.getBlockState(BlockPos.of(packed));
+            levels &= state.is(Blocks.LIGHT) && state.getValue(net.minecraft.world.level.block.LightBlock.LEVEL) == 8;
+        }
+        check(levels, "at full brightness, its {} light blocks are at level 8, the page's limit", lights.length);
+        page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.REAL_LIGHT, 0, 0);
+    }
+
+    private static void checkRealLightOff(ServerLevel level) {
+        FloodlightBlock.Entity center = fixture(level, CENTER_LIGHT);
+        check(center.lightBlocks().length == 0 && center.beam().strength() > 0,
+                "real light off on the page: still lit, {} light blocks", center.lightBlocks().length);
+        page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.REAL_LIGHT, 0, 1);
+        // Recall "off" (every group at 0%) over the 1.5 s fade.
+        page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.RECALL, 3, 0);
+    }
+
+    private static void checkFadeMidway(ServerLevel level) {
+        float brightness = consoleAt(level).settings.groups[0].brightness;
+        check(brightness > 0.05f && brightness < 0.95f, "a recalled scene fades: half a second in, {}", brightness);
+    }
+
+    private static void checkFadeDone(ServerLevel level) {
+        var console = consoleAt(level);
+        check(console.settings.groups[0].brightness == 0 && console.settings.master == 1,
+                "the fade ends on the scene: brightness {}, master {}", console.settings.groups[0].brightness,
+                console.settings.master);
+        check(io.github.jinsh1228.largelights.ConsoleSettings.scene(console) == 3, "the console shows the scene recalled");
+        // Saved from the faders, then the match scene brought back for the photo.
+        console.settings.groups[0].brightness = 0.5f;
+        page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.SAVE, 1, 0);
+        check(io.github.jinsh1228.largelights.ConsoleSettings.scene(console, 1)[0] == 0.5f,
+                "saving a scene keeps the faders: {}", io.github.jinsh1228.largelights.ConsoleSettings.scene(console, 1)[0]);
+        page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.RECALL, 0, 0);
+    }
+
+    private static void checkPageShows(Minecraft mc) {
+        var console = org.haruyq.createmediasystems.lighting.LightingConsoleBlock.find(mc.level, CONSOLE);
+        var page = console == null ? null : org.haruyq.createmediasystems.lighting.LightingConsolePage.showing(console);
+        check(page instanceof io.github.jinsh1228.largelights.client.FloodlightPage,
+                "the console shows the floodlight page for a group with a floodlight: {}", page);
+        console.settings.selectedGroup = 1;
+        var other = org.haruyq.createmediasystems.lighting.LightingConsolePage.showing(console);
+        console.settings.selectedGroup = 0;
+        check(other == null, "and its own page for a group without one");
+    }
+
     private static void checkLinked(net.minecraft.server.MinecraftServer server) {
         ServerLevel level = server.overworld();
         FloodlightBlock.Entity center = fixture(level, CENTER_LIGHT);
         var beam = center.beam();
         check(beam.console() != null, "the centre floodlight is run by the console");
         check(Math.abs(beam.strength() - 0.4f) < 1e-4, "brightness from the console: {}", beam.strength());
-        check(beam.spread() == 18, "beam width from the console: {}", beam.spread());
+        check(beam.spread() == 18, "beam width from the console's floodlight page: {}", beam.spread());
         check(beam.range() == 120, "reach from the console: {}", beam.range());
         int expected = io.github.jinsh1228.largelights.RealLight.lightLevel(0.4f);
         long[] lights = center.lightBlocks();

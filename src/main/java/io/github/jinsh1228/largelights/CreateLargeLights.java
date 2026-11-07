@@ -17,6 +17,7 @@ import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.registries.DeferredBlock;
@@ -55,6 +56,7 @@ public class CreateLargeLights {
         BLOCK_ENTITIES.register(modBus);
         modBus.addListener(CreateLargeLights::registerPayloads);
         modBus.addListener(CreateLargeLights::addToTab);
+        NeoForge.EVENT_BUS.addListener(SceneFades::tick);
     }
 
     public static ResourceLocation id(String path) {
@@ -62,7 +64,9 @@ public class CreateLargeLights {
     }
 
     private static void registerPayloads(RegisterPayloadHandlersEvent event) {
-        AimPacket.register(event.registrar("1"));
+        var registrar = event.registrar("1");
+        AimPacket.register(registrar);
+        ConsolePacket.register(registrar);
     }
 
     private static void addToTab(BuildCreativeModeTabContentsEvent event) {
