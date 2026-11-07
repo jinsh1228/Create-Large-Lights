@@ -1,0 +1,15 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
+rootProject.name = 'CMSFloodlights'
+
+// Create: Media Systems is built from its source next to this one (-PcmsPath=... for elsewhere), so the fixture
+// API it adds is there while it is unreleased. It stands in for org.haruyq:CreateMediaSystems below.
+includeBuild(providers.gradleProperty('cmsPath').getOrElse('../Create-Media-Systems'))

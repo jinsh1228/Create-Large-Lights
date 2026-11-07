@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "cms_floodlights:block/fixture"
+    }
+  }
+}
