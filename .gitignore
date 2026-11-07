@@ -8,3 +8,4 @@ out/
 libs/
 /logs/
 run-demo/
+dist/
