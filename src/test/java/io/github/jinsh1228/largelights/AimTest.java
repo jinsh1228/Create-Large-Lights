@@ -47,4 +47,24 @@ class AimTest {
         assertEquals(kind.spread(0), kind.spread(kind.spreads()));
         assertEquals(kind.spread(kind.spreads() - 1), kind.spread(-1));
     }
+
+    @Test
+    void theConsolesDefaultAimLeavesALightWhereItWasAimed() {
+        float[] aim = Aim.offset(30, 50, 0, Aim.NEUTRAL_TILT);
+        assertEquals(30, aim[0]);
+        assertEquals(50, aim[1]);
+    }
+
+    @Test
+    void panTurnsRightAndTiltDown() {
+        float[] aim = Aim.offset(170, 80, 20, Aim.NEUTRAL_TILT + 20);
+        assertEquals(-170, aim[0], 1e-4);
+        // Down no further than straight down.
+        assertEquals(90, aim[1]);
+        Vec3 before = Aim.direction(0, 0);
+        Vec3 after = Aim.direction(Aim.offset(0, 0, 90, Aim.NEUTRAL_TILT)[0], 0);
+        // Facing south, turning right (seen from above) faces west.
+        assertClose(new Vec3(0, 0, 1), before);
+        assertClose(new Vec3(-1, 0, 0), after);
+    }
 }

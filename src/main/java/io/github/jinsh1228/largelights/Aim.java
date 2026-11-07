@@ -14,6 +14,11 @@ import net.minecraft.world.phys.Vec3;
 public final class Aim {
     public static final float MIN_PITCH = -90;
     public static final float MAX_PITCH = 90;
+    /**
+     * A lighting console group's tilt that leaves a floodlight where it was aimed: the console's default (a stage
+     * light's 35° down), so that linking one to a group changes nothing till the group's aim is moved.
+     */
+    public static final float NEUTRAL_TILT = 35;
 
     private Aim() {
     }
@@ -28,6 +33,14 @@ public final class Aim {
     public static Vec3 direction(float yaw, float pitch) {
         Vector3f forward = head(yaw, pitch).transformDirection(new Vector3f(0, 0, 1));
         return new Vec3(forward.x, forward.y, forward.z).normalize();
+    }
+
+    /**
+     * {@code yaw} and {@code pitch} turned by a console group's {@code pan} (positive turns right, seen from above)
+     * and {@code tilt} (positive turns down), both from the group's neutral aim (pan 0, NEUTRAL_TILT).
+     */
+    public static float[] offset(float yaw, float pitch, float pan, float tilt) {
+        return new float[]{Mth.wrapDegrees(yaw + pan), Mth.clamp(pitch + tilt - NEUTRAL_TILT, MIN_PITCH, MAX_PITCH)};
     }
 
     /** The yaw and pitch that point along {@code direction}; straight up or down keeps {@code fallbackYaw}. */

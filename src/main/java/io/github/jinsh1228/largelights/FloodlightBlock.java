@@ -210,10 +210,11 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
 
         /**
          * How it shines now: from its console's group if linked, from redstone if not. Strength is 0 to 1 and
-         * leaves out the console's music and video (the renderer adds those).
+         * leaves out the console's music and video, and yaw and pitch its group's motion (the renderer adds those):
+         * they are its own aim turned by the group's pan and tilt.
          */
         public record Beam(@Nullable LightingConsoleBlock.Entity console, @Nullable LightingSettings.Group group,
-                           float strength, float spread, float range) {
+                           float strength, float spread, float range, float yaw, float pitch) {
         }
 
         public Beam beam() {
@@ -221,12 +222,13 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
             if (owner != null) {
                 LightingSettings.Group settings = owner.settings.groups[group];
                 float strength = owner.formed && owner.settings.enabled ? owner.settings.master * settings.brightness : 0;
+                float[] aim = Aim.offset(yaw, pitch, settings.pan, settings.tilt);
                 return new Beam(owner, settings, Mth.clamp(strength, 0, 1), Mth.clamp(settings.spread, 1, kind().maxSpread()),
-                        Mth.clamp(settings.range, 2, LightingSettings.MAX_RANGE));
+                        Mth.clamp(settings.range, 2, LightingSettings.MAX_RANGE), aim[0], aim[1]);
             }
             // Linked to a console that isn't here (unloaded): dark till it is.
             float strength = console != null ? 0 : getBlockState().getValue(POWER) / 15f;
-            return new Beam(null, null, strength, spreadDegrees(), kind().range);
+            return new Beam(null, null, strength, spreadDegrees(), kind().range, yaw, pitch);
         }
 
         public void aim(float yaw, float pitch) {
@@ -259,9 +261,9 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
                     LightingText.number(Math.round(beam.spread()) + "°"),
                     LightingText.number(Math.round(beam.range()) + " m")).withColor(LightingText.TEXT));
             tooltip.add(Component.translatable("create_large_lights.tooltip.aim",
-                    // As a compass reads: north 0°, east 90°.
-                    LightingText.number(Math.floorMod(Math.round(yaw + 180), 360) + "°"),
-                    LightingText.number(Math.round(-pitch) + "°")).withColor(LightingText.TEXT));
+                    // As a compass reads: north 0°, east 90°. With the console's pan and tilt, not its motion.
+                    LightingText.number(Math.floorMod(Math.round(beam.yaw() + 180), 360) + "°"),
+                    LightingText.number(Math.round(-beam.pitch()) + "°")).withColor(LightingText.TEXT));
             tooltip.add(Component.translatable("create_large_lights.tooltip.real_light",
                     LightingText.number(RealLight.lightLevel(beam.strength())),
                     LightingText.number(lights.size())).withColor(LightingText.TEXT));

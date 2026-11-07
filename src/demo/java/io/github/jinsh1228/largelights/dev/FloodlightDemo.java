@@ -228,6 +228,8 @@ public final class FloodlightDemo {
             return;
         }
         console = console.controller();
+        // The unlinked floodlights go dark: the linked one shines on in the console's red, its light blocks its own.
+        power(level, false);
         FloodlightBlock.Entity center = fixture(level, CENTER_LIGHT);
         check(console.bind(center, 0), "the centre floodlight linked to the console's group 1");
         var group = console.settings.groups[0];
@@ -239,6 +241,9 @@ public final class FloodlightDemo {
         group.colors[0] = 0xFF3040;
         group.colorCycle = false;
         group.audio = false;
+        // Turned 90° right of its aim (straight down, so it faces west) and 30° up from it.
+        group.pan = 90;
+        group.tilt = Aim.NEUTRAL_TILT - 30;
         console.changed();
     }
 
@@ -258,12 +263,20 @@ public final class FloodlightDemo {
             var state = level.getBlockState(BlockPos.of(packed));
             levels &= state.is(Blocks.LIGHT) && state.getValue(net.minecraft.world.level.block.LightBlock.LEVEL) == expected;
         }
-        check(levels, "its {} light blocks are all at level {}, as the console's brightness", lights.length, expected);
+        check(levels && lights.length > 0, "its {} light blocks are all at level {}, as the console's brightness",
+                lights.length, expected);
+        check(Math.abs(beam.pitch() - 60) < 1e-3 && Math.abs(Math.abs(beam.yaw()) - 90) < 1e-3,
+                "aimed by the console's pan and tilt: yaw {}, pitch {}", beam.yaw(), beam.pitch());
+        double x = 0;
+        for (long packed : lights) {
+            x += BlockPos.of(packed).getX();
+        }
+        x /= Math.max(1, lights.length);
+        // 27 blocks up, 60° down, facing west: the light falls about 16 blocks west of straight below.
+        check(x < -10 && x > -22, "its light falls west of it, around x {}", Math.round(x));
         float spread = center.beam().spread();
         wrench(level, CENTER_LIGHT);
         check(center.beam().spread() == spread, "the wrench leaves a linked floodlight's beam width to the console");
-        // Left off for the last shot: the unlinked floodlights go dark, the linked one shines on in the console's red.
-        power(level, false);
         check(center.beam().strength() > 0, "a linked floodlight ignores redstone");
         view(server, new Vec3(-14.5, FLOOR + 14, -14.5), new Vec3(0.5, FLOOR, 0.5));
     }

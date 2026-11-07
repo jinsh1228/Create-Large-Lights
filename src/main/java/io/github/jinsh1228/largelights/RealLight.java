@@ -82,7 +82,8 @@ public final class RealLight {
         boolean carried = !SableCompat.toWorld(level, pos, center).equals(center);
         int brightness = FloodlightConfig.REAL_LIGHT.get() && !carried ? lightLevel(beam.strength()) : 0;
         int spacing = FloodlightConfig.SPACING.get();
-        int signature = Objects.hash(brightness, light.yaw, light.pitch, beam.spread(), beam.range(), spacing,
+        // The aim with the console's pan and tilt; a group's motion moves the beam, not the light blocks.
+        int signature = Objects.hash(brightness, beam.yaw(), beam.pitch(), beam.spread(), beam.range(), spacing,
                 FloodlightConfig.MAX_LIGHTS.get());
         long now = level.getGameTime();
         if (signature == light.lightSignature && now - light.lightUpdated < REFRESH) {
@@ -100,8 +101,8 @@ public final class RealLight {
     /** Where the beam wants light blocks: air just off the faces it falls on, one in each spacing-sized cell. */
     private static Long2LongOpenHashMap footprint(Level level, BlockPos pos, FloodlightBlock.Entity light,
                                                   FloodlightBlock.Entity.Beam beam, int spacing, int max) {
-        var head = Aim.head(light.yaw, light.pitch);
-        Vec3 forward = Aim.direction(light.yaw, light.pitch);
+        var head = Aim.head(beam.yaw(), beam.pitch());
+        Vec3 forward = Aim.direction(beam.yaw(), beam.pitch());
         org.joml.Vector3f r = head.transformDirection(new org.joml.Vector3f(1, 0, 0)).normalize();
         org.joml.Vector3f u = head.transformDirection(new org.joml.Vector3f(0, 1, 0)).normalize();
         Vec3 right = new Vec3(r.x, r.y, r.z);

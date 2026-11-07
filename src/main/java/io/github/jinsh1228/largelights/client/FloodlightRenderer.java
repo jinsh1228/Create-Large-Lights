@@ -30,6 +30,7 @@ import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.core.Direction;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.HitResult;
@@ -50,6 +51,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
     private static final int EDGES = 16;
     private static final int STEPS = 8;
     private static final Map<FloodlightBlock.Entity, Trace> TRACES = new WeakHashMap<>();
+    private static final Map<FloodlightBlock.Entity, AimMotion> MOTION = new WeakHashMap<>();
 
     FloodlightRenderer(BlockEntityRendererProvider.Context context) {
     }
@@ -67,7 +69,15 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         Direction facing = lamp.getBlockState().getValue(FloodlightBlock.FACING);
         // Local +Y away from what it hangs on.
         Matrix4f mount = new Matrix4f(model).translate(0.5f, 0.5f, 0.5f).rotate(facing.getRotation());
-        Matrix4f local = Aim.head(lamp.yaw, lamp.pitch);
+        // Linked, the console's group sets all of it; unlinked, redstone sets how bright (FloodlightBlock.Entity.beam).
+        FloodlightBlock.Entity.Beam beam = lamp.beam();
+        LightingConsoleBlock.Entity console = beam.console();
+        double seconds = (level.getGameTime() + (double) partialTick) / 20;
+        if (console != null) {
+            seconds = AnalysisPlayback.apply(console, seconds);
+        }
+        float[] aim = aim(lamp, beam, seconds, partialTick);
+        Matrix4f local = Aim.head(aim[0], aim[1]);
         Matrix4f head = new Matrix4f(model).mul(local);
 
         VertexConsumer body = buffers.getBuffer(BODY);
@@ -107,14 +117,10 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
             return;
         }
 
-        // Linked, the console's group sets all of it; unlinked, redstone sets how bright (FloodlightBlock.Entity.beam).
-        FloodlightBlock.Entity.Beam beam = lamp.beam();
         float strength = beam.strength();
         int color = WARM_WHITE;
-        LightingConsoleBlock.Entity console = beam.console();
         if (console != null) {
             LightingSettings.Group group = beam.group();
-            double seconds = AnalysisPlayback.apply(console, (level.getGameTime() + (double) partialTick) / 20);
             boolean signal = level.getGameTime() - console.signalAt < 30;
             if (group.audio && console.hasAudio && signal) {
                 float energy = switch (group.audioBand) {
@@ -164,6 +170,46 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
                 rays, model, effects, kind.radius);
         cone(effects.getBuffer(LightingRenderer.beamType()), model, trace, origin, right, up,
                 stadium ? 0.85f : 0.36f, stadium ? 0.55f : 0.36f, color, strength * kind.haze);
+    }
+
+    /**
+     * Where the head points this frame: its aim with the console's pan and tilt (Beam), and, linked, its group's
+     * motion as a stage light's (a sway, a circle, or following the target player), eased as a stage light's head.
+     */
+    private static float[] aim(FloodlightBlock.Entity lamp, FloodlightBlock.Entity.Beam beam, double seconds,
+                               float partialTick) {
+        float yaw = beam.yaw();
+        float pitch = beam.pitch();
+        boolean hold = false;
+        LightingConsoleBlock.Entity console = beam.console();
+        LightingSettings.Group group = beam.group();
+        if (console != null && group != null) {
+            double phase = (group.audio && console.audioSource != null ? console.motionPhase : seconds) * group.speed
+                    + lamp.order * 0.35;
+            if (group.motion == 1) {
+                yaw += (float) Math.sin(phase) * 55;
+            } else if (group.motion == 2) {
+                yaw += (float) Math.sin(phase) * 48;
+                pitch += (float) Math.cos(phase) * 22;
+            } else if (group.motion == 3) {
+                // Following: straight at the target player; with none, held where it is.
+                hold = true;
+                Player target = group.target == null ? null : lamp.getLevel().getPlayerByUUID(group.target);
+                if (target != null) {
+                    Vec3 body = target.getPosition(partialTick).add(0, target.getBbHeight() * 0.5, 0);
+                    Vec3 toward = SableCompat.toRenderBlockSpace(lamp.getLevel(), lamp.getBlockPos(), body)
+                            .subtract(Vec3.atCenterOf(lamp.getBlockPos()));
+                    if (toward.lengthSqr() > 0.25) {
+                        float[] at = Aim.toward(toward, yaw);
+                        yaw = at[0];
+                        pitch = at[1];
+                        hold = false;
+                    }
+                }
+            }
+        }
+        return MOTION.computeIfAbsent(lamp, ignored -> new AimMotion())
+                .update(seconds, yaw, Mth.clamp(pitch, Aim.MIN_PITCH, Aim.MAX_PITCH), hold);
     }
 
     /**

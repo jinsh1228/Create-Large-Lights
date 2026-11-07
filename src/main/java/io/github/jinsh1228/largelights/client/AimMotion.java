@@ -1,0 +1,26 @@
+package io.github.jinsh1228.largelights.client;
+
+import net.minecraft.util.Mth;
+
+/**
+ * A floodlight head easing toward where it should point, as a Create: Media Systems stage light's does
+ * (LightingMotion): the shorter way round in yaw, and held still while it has nowhere to go.
+ */
+final class AimMotion {
+    private double time = Double.NaN;
+    private float yaw;
+    private float pitch;
+
+    float[] update(double seconds, float desiredYaw, float desiredPitch, boolean hold) {
+        if (!Double.isFinite(time) || seconds < time) {
+            yaw = desiredYaw;
+            pitch = desiredPitch;
+        } else if (!hold) {
+            double weight = 1 - Math.exp(-Math.min(seconds - time, 0.5) * 9);
+            yaw += Mth.wrapDegrees(desiredYaw - yaw) * (float) weight;
+            pitch += (desiredPitch - pitch) * (float) weight;
+        }
+        time = seconds;
+        return new float[]{Mth.wrapDegrees(yaw), pitch};
+    }
+}
