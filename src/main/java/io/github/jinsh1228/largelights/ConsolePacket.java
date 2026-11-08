@@ -17,7 +17,7 @@ import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 public record ConsolePacket(BlockPos console, int group, Action action, int index, float value)
         implements CustomPacketPayload {
     public enum Action {
-        SPREAD, REAL_LIGHT, MAX_LEVEL, FADE, RECALL, SAVE
+        SPREAD, REAL_LIGHT, MAX_LEVEL, FADE, RECALL, SAVE, TIMERS_ON, TIMER_ON, TIMER_TIME, TIMER_SCENE
     }
 
     public static final Type<ConsolePacket> TYPE = new Type<>(CreateLargeLights.id("console"));
@@ -43,8 +43,8 @@ public record ConsolePacket(BlockPos console, int group, Action action, int inde
 
     /** Whether the packet asks for something possible, before anything is looked up. */
     public boolean valid() {
-        return group >= 0 && group < LightingSettings.GROUPS && index >= 0 && index < ConsoleSettings.SCENES
-                && Float.isFinite(value);
+        return group >= 0 && group < LightingSettings.GROUPS && index >= 0
+                && index < Math.max(ConsoleSettings.SCENES, ConsoleSettings.TIMERS) && Float.isFinite(value);
     }
 
     private static void handle(ConsolePacket packet, IPayloadContext context) {
@@ -73,6 +73,10 @@ public record ConsolePacket(BlockPos console, int group, Action action, int inde
                 SceneFades.start(console, ConsoleSettings.scene(console, packet.index));
             }
             case SAVE -> ConsoleSettings.saveScene(console, packet.index);
+            case TIMERS_ON -> ConsoleSettings.setTimersOn(console, packet.value != 0);
+            case TIMER_ON -> ConsoleSettings.setTimer(console, packet.index, packet.value != 0, null, null);
+            case TIMER_TIME -> ConsoleSettings.setTimer(console, packet.index, null, Math.round(packet.value), null);
+            case TIMER_SCENE -> ConsoleSettings.setTimer(console, packet.index, null, null, Math.round(packet.value));
         }
     }
 }

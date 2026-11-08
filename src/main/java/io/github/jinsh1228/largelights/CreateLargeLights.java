@@ -45,6 +45,18 @@ public class CreateLargeLights {
                     FloodlightKind.STADIUM_LIGHT));
     public static final DeferredItem<BlockItem> STADIUM_LIGHT_ITEM =
             ITEMS.registerSimpleBlockItem("stadium_light", STADIUM_LIGHT, new Item.Properties());
+    public static final DeferredBlock<LightPoleBlock> LIGHT_POLE = BLOCKS.register("light_pole",
+            () -> new LightPoleBlock(BlockBehaviour.Properties.ofFullCopy(Blocks.IRON_BARS).strength(3).noOcclusion()));
+    public static final DeferredItem<BlockItem> LIGHT_POLE_ITEM = ITEMS.registerSimpleBlockItem("light_pole", LIGHT_POLE);
+    public static final DeferredBlock<StreetLightBlock> STREET_LIGHT = BLOCKS.register("street_light",
+            () -> new StreetLightBlock(BlockBehaviour.Properties.ofFullCopy(Blocks.IRON_BLOCK).strength(3).noOcclusion()
+                    .lightLevel(state -> state.getValue(StreetLightBlock.LIT) ? 15 : 0)));
+    public static final DeferredItem<BlockItem> STREET_LIGHT_ITEM = ITEMS.registerSimpleBlockItem("street_light", STREET_LIGHT);
+    public static final Supplier<BlockEntityType<StreetLightBlock.Entity>> STREET_LIGHT_ENTITY = BLOCK_ENTITIES.register(
+            "street_light", () -> BlockEntityType.Builder.of(StreetLightBlock.Entity::new, STREET_LIGHT.get()).build(null));
+    /** Shows the light level around whoever holds it (client.LightMeter). */
+    public static final DeferredItem<Item> LIGHT_METER = ITEMS.register("light_meter",
+            () -> new Item(new Item.Properties().stacksTo(1)));
     public static final Supplier<BlockEntityType<FloodlightBlock.Entity>> FLOODLIGHT_ENTITY = BLOCK_ENTITIES.register(
             "floodlight", () -> BlockEntityType.Builder.of(FloodlightBlock.Entity::new, FLOODLIGHT.get(),
                     STADIUM_LIGHT.get()).build(null));
@@ -73,6 +85,9 @@ public class CreateLargeLights {
         if (event.getTabKey().equals(CMS_TAB)) {
             event.accept(FLOODLIGHT_ITEM.get());
             event.accept(STADIUM_LIGHT_ITEM.get());
+            event.accept(STREET_LIGHT_ITEM.get());
+            event.accept(LIGHT_POLE_ITEM.get());
+            event.accept(LIGHT_METER.get());
         }
     }
 }

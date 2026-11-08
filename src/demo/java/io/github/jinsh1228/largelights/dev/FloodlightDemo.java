@@ -141,7 +141,46 @@ public final class FloodlightDemo {
             server.execute(() -> view(server, new Vec3(4.5, FLOOR + 2.55, 22.45), new Vec3(4.5, FLOOR + 1.55, 25)));
         } else if (ticks == 1800) {
             shot(mc, "5_console_page.png");
-        } else if (ticks == 1840) {
+        } else if (ticks == 1850) {
+            server.execute(() -> {
+                buildStreet(server.overworld());
+                view(server, new Vec3(37.5, FLOOR + 7, 7.5), new Vec3(56, FLOOR, -2));
+            });
+        } else if (ticks == 1950) {
+            server.execute(() -> {
+                checkStreetNight(server.overworld());
+                server.getPlayerList().getPlayers().getFirst().setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
+                        new net.minecraft.world.item.ItemStack(CreateLargeLights.LIGHT_METER.get()));
+            });
+        } else if (ticks == 1985) {
+            checkMeter();
+        } else if (ticks == 1990) {
+            shot(mc, "6_street_lights_meter.png");
+        } else if (ticks == 2000) {
+            server.execute(() -> {
+                server.getPlayerList().getPlayers().getFirst().setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
+                        net.minecraft.world.item.ItemStack.EMPTY);
+                server.overworld().setDayTime(6000);
+            });
+        } else if (ticks == 2040) {
+            server.execute(() -> checkStreetDay(server.overworld()));
+        } else if (ticks == 2070) {
+            server.execute(() -> checkStreetWrench(server.overworld()));
+        } else if (ticks == 2100) {
+            server.execute(() -> {
+                checkStreetBack(server.overworld());
+                timersSetup(server.overworld());
+            });
+        } else if (ticks == 2130) {
+            server.execute(() -> server.overworld().setDayTime(13100));
+        } else if (ticks == 2190) {
+            server.execute(() -> checkTimer(server.overworld(), 3, 0, 13600));
+        } else if (ticks == 2250) {
+            server.execute(() -> checkTimer(server.overworld(), 0, 1, 12000));
+        } else if (ticks == 2280) {
+            server.execute(() -> check(io.github.jinsh1228.largelights.ConsoleSettings.scene(consoleAt(server.overworld())) == 0,
+                    "setting the time back recalls nothing"));
+        } else if (ticks == 2300) {
             LogUtils.getLogger().info("Floodlight demo done: {} checks failed", failures);
             mc.stop();
         }
@@ -360,6 +399,107 @@ public final class FloodlightDemo {
         stage.unlink();
         level.removeBlock(stagePos, false);
         check(console.family(1) == null && console.family(2) == null, "emptied, groups take any family again");
+    }
+
+    private static final int[] STREET_X = {44, 56, 68};
+    private static final int STREET_Z = -4;
+    private static final int STREET_TOP = FLOOR + 6;
+
+    /** A road out in the open, by night, with three street lights on poles over it. */
+    private static void buildStreet(ServerLevel level) {
+        for (int x = 36; x <= 76; x++) {
+            for (int z = -8; z <= 8; z++) {
+                for (int y = FLOOR + 1; y <= FLOOR + 12; y++) {
+                    set(level, x, y, z, Blocks.AIR.defaultBlockState());
+                }
+                set(level, x, FLOOR, z, Math.abs(z) <= 3 ? Blocks.GRAY_CONCRETE.defaultBlockState()
+                        : Blocks.GRASS_BLOCK.defaultBlockState());
+            }
+        }
+        for (int x : STREET_X) {
+            for (int y = FLOOR + 1; y < STREET_TOP; y++) {
+                set(level, x, y, STREET_Z, CreateLargeLights.LIGHT_POLE.get().defaultBlockState());
+            }
+            level.setBlock(new BlockPos(x, STREET_TOP, STREET_Z), CreateLargeLights.STREET_LIGHT.get().defaultBlockState()
+                    .setValue(io.github.jinsh1228.largelights.StreetLightBlock.FACING, Direction.SOUTH), Block.UPDATE_ALL);
+        }
+    }
+
+    private static io.github.jinsh1228.largelights.StreetLightBlock.Entity street(ServerLevel level, int i) {
+        return (io.github.jinsh1228.largelights.StreetLightBlock.Entity) level.getBlockEntity(
+                new BlockPos(STREET_X[i], STREET_TOP, STREET_Z));
+    }
+
+    private static boolean streetLit(ServerLevel level, int i) {
+        return level.getBlockState(new BlockPos(STREET_X[i], STREET_TOP, STREET_Z))
+                .getValue(io.github.jinsh1228.largelights.StreetLightBlock.LIT);
+    }
+
+    private static void checkStreetNight(ServerLevel level) {
+        for (int i = 0; i < STREET_X.length; i++) {
+            check(streetLit(level, i) && street(level, i).lightCount() > 0,
+                    "street light {} lit by night, {} light blocks", i + 1, street(level, i).lightCount());
+        }
+        // The road under the middle light, 6 blocks down: past a lamp's own reach, lit by its light blocks.
+        int light = level.getBrightness(net.minecraft.world.level.LightLayer.BLOCK, new BlockPos(STREET_X[1], FLOOR + 1, 0));
+        check(light >= 10, "the road under a street light is at light {}", light);
+    }
+
+    private static void checkMeter() {
+        int[] reading = io.github.jinsh1228.largelights.client.LightMeter.reading();
+        check(reading[1] > 100 && reading[0] > 0, "the light meter looks over {} floors, {} of them dark", reading[1],
+                reading[0]);
+    }
+
+    private static void checkStreetDay(ServerLevel level) {
+        for (int i = 0; i < STREET_X.length; i++) {
+            check(!streetLit(level, i) && street(level, i).lightCount() == 0,
+                    "street light {} out by day, {} light blocks left", i + 1, street(level, i).lightCount());
+        }
+        level.setDayTime(18000);
+    }
+
+    private static void wrenchStreet(ServerLevel level) {
+        BlockPos pos = new BlockPos(STREET_X[0], STREET_TOP, STREET_Z);
+        ServerPlayer player = level.getServer().getPlayerList().getPlayers().getFirst();
+        var state = level.getBlockState(pos);
+        ((io.github.jinsh1228.largelights.StreetLightBlock) state.getBlock()).onWrenched(state,
+                new net.minecraft.world.item.context.UseOnContext(player, net.minecraft.world.InteractionHand.MAIN_HAND,
+                        new net.minecraft.world.phys.BlockHitResult(Vec3.atCenterOf(pos), Direction.UP, pos, false)));
+    }
+
+    private static void checkStreetWrench(ServerLevel level) {
+        check(streetLit(level, 0), "night again: street light 1 lit again");
+        wrenchStreet(level);
+        check(!streetLit(level, 0), "the wrench turns its sensor off: out, though it is night");
+    }
+
+    private static void checkStreetBack(ServerLevel level) {
+        check(!streetLit(level, 0) && street(level, 0).lightCount() == 0, "with its sensor off it stays out");
+        wrenchStreet(level);
+        check(streetLit(level, 0), "and the wrench turns it back on");
+    }
+
+    /** Timers: at 19:00 the off scene, at 19:30 the match scene; the clock is set just before them. */
+    private static void timersSetup(ServerLevel level) {
+        page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.TIMERS_ON, 0, 1);
+        page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.TIMER_TIME, 0, 13000);
+        page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.TIMER_SCENE, 0, 3);
+        page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.TIMER_ON, 0, 1);
+        page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.TIMER_TIME, 1, 13500);
+        page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.TIMER_SCENE, 1, 0);
+        page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.TIMER_ON, 1, 1);
+        level.setDayTime(12900);
+    }
+
+    private static void checkTimer(ServerLevel level, int scene, float brightness, long next) {
+        var console = consoleAt(level);
+        check(io.github.jinsh1228.largelights.ConsoleSettings.scene(console) == scene
+                        && Math.abs(console.settings.groups[0].brightness - brightness) < 1e-4,
+                "passing {} the timer recalls scene {}: brightness {}",
+                io.github.jinsh1228.largelights.client.FloodlightPage.clock(level.getDayTime()), scene,
+                console.settings.groups[0].brightness);
+        level.setDayTime(next);
     }
 
     private static void checkLinked(net.minecraft.server.MinecraftServer server) {

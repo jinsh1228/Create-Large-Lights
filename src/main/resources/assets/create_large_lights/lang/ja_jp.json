@@ -32,7 +32,6 @@
   "create_large_lights.console.color": "色温度",
   "create_large_lights.console.temperature": "色温度: %s",
   "create_large_lights.console.custom": "カスタム",
-  "create_large_lights.console.color_help": "ボタンで色温度、ノブで細かく調整",
   "create_large_lights.console.temperature_key": "色温度",
   "create_large_lights.console.beam": "ビーム",
   "create_large_lights.console.range": "射程",
@@ -48,5 +47,16 @@
   "create_large_lights.console.motion_now": "モーション: %s",
   "create_large_lights.console.target_now": "追従: %s",
   "create_large_lights.console.motion": "モーション",
-  "create_large_lights.console.target": "追従するプレイヤー"
+  "create_large_lights.console.target": "追従するプレイヤー",
+  "block.create_large_lights.light_pole": "街灯用ポール",
+  "block.create_large_lights.street_light": "街灯",
+  "item.create_large_lights.light_meter": "照度計",
+  "create_large_lights.message.street_light.auto": "暗くなると点灯・明るくなると消灯（レッドストーンでも点灯）",
+  "create_large_lights.message.street_light.redstone": "レッドストーン信号でのみ点灯",
+  "create_large_lights.light_meter.reading": "ここの明るさ %s（照明 %s ・空 %s）・周囲の暗い場所 %s か所",
+  "create_large_lights.console.timers_now": "タイマー %s ・現在 %s",
+  "create_large_lights.console.timers": "タイマー（全体）",
+  "create_large_lights.console.timer": "タイマー %s",
+  "create_large_lights.console.timer_time": "タイマー %s の時刻（スクロールで15分、スニークで1時間）",
+  "create_large_lights.console.timer_scene": "タイマー %s のシーン"
 }

@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "building",
+  "pattern": [
+    "S",
+    "S",
+    "S"
+  ],
+  "key": {
+    "S": {
+      "item": "create:iron_sheet"
+    }
+  },
+  "result": {
+    "id": "create_large_lights:light_pole",
+    "count": 6
+  }
+}

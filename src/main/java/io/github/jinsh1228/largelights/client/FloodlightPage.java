@@ -124,6 +124,24 @@ public final class FloodlightPage implements LightingConsolePage {
         return new Area(bay + 0.065f, rowTop(row) - 0.117f, bay + 0.935f, rowTop(row));
     }
 
+    /** The timers' rows, on the middle monitor: the switch for them all, then one row each. */
+    private static final int TIMERS_ROW = 1;
+    /** A timer row's parts, across: its switch, its time, its scene (monitor x). */
+    private static final Area TIMER_ON = new Area(2.065f, 0, 2.29f, 0);
+    private static final Area TIMER_TIME = new Area(2.29f, 0, 2.6f, 0);
+    private static final Area TIMER_SCENE = new Area(2.6f, 0, 2.935f, 0);
+
+    private static Area timerPart(Area part, int timer) {
+        float top = rowTop(TIMERS_ROW + 1 + timer);
+        return new Area(part.left(), top - 0.117f, part.right(), top);
+    }
+
+    /** A day's time (0 is 6:00) as a clock reads it. */
+    public static String clock(long dayTime) {
+        long time = Math.floorMod(dayTime, (long) ConsoleSettings.DAY);
+        return String.format(java.util.Locale.ROOT, "%d:%02d", (time / 1000 + 6) % 24, time % 1000 * 60 / 1000);
+    }
+
     /** The real light row, on the right monitor: pressed, it switches the group's real light. */
     private static final int REAL_LIGHT_ROW = 2;
     /** The group's motion and its target, as the console's own page sets them (it doesn't show for this group). */
@@ -198,12 +216,27 @@ public final class FloodlightPage implements LightingConsolePage {
             surface.knob((knob.left() + knob.right()) / 2, KNOB_Z, ACCENTS[i], (current >> ((2 - i) * 8) & 255) / 255f);
             surface.deckText(knob.left() + 0.07f, 1.2f, new String[]{"R", "G", "B"}[i], ACCENTS[i], 0.06f);
         }
-        surface.monitor(2.08f, 2.3f, rowTop(0) - 0.1f, rowTop(0) - 0.02f, current);
-        surface.monitorText(2.36f, rowTop(0) - 0.015f, LightingText.text(String.format("#%06X", current),
-                LightingText.readable(current)), 0.55f);
-        surface.monitorText(2.08f, rowTop(1) - 0.015f, text("temperature", TEMPERATURE_COLORS[nearest] == current
-                ? LightingText.number(TEMPERATURES[nearest] + "K") : text("custom").withColor(LightingText.MODE)), 0.84f);
-        surface.monitorText(2.08f, rowTop(2) - 0.015f, text("color_help").withColor(LightingText.MUTED), 0.84f);
+        surface.monitor(2.08f, 2.22f, rowTop(0) - 0.1f, rowTop(0) - 0.02f, current);
+        surface.monitorText(2.26f, rowTop(0) - 0.015f, LightingText.text(String.format("#%06X ", current),
+                LightingText.readable(current)).append(TEMPERATURE_COLORS[nearest] == current
+                ? LightingText.number(TEMPERATURES[nearest] + "K") : text("custom").withColor(LightingText.MODE)), 0.66f);
+
+        // Timers: the middle monitor's lower rows. On or off, then each timer's on, time and scene.
+        ConsoleSettings.View view = ConsoleSettings.view(console);
+        long day = console.getLevel() == null ? 0 : console.getLevel().getDayTime();
+        surface.monitor(2.065f, 2.935f, rowTop(TIMERS_ROW) - 0.117f, rowTop(TIMERS_ROW),
+                view.timersOn() ? 0x1F4A33 : 0x2A2F3A);
+        surface.monitorText(2.08f, rowTop(TIMERS_ROW) - 0.015f, text("timers_now", LightingText.on(view.timersOn()),
+                LightingText.number(clock(day))), 0.84f);
+        for (int i = 0; i < ConsoleSettings.TIMERS; i++) {
+            ConsoleSettings.Timer timer = view.timers()[i];
+            float top = rowTop(TIMERS_ROW + 1 + i) - 0.015f;
+            int muted = view.timersOn() && timer.on() ? LightingText.TEXT : LightingText.MUTED;
+            surface.monitorText(TIMER_ON.left() + 0.015f, top, LightingText.on(timer.on()), 0.2f);
+            surface.monitorText(TIMER_TIME.left() + 0.015f, top, LightingText.text(clock(timer.time()), muted), 0.28f);
+            surface.monitorText(TIMER_SCENE.left() + 0.015f, top, text("scene." + timer.scene()).withColor(
+                    muted == LightingText.TEXT ? LightingText.MODE : LightingText.MUTED), 0.28f);
+        }
 
         // The beam: the right.
         surface.deckText(3.08f, 0.12f, plain("beam"), LightingText.NUMBER, 0.84f);
@@ -295,6 +328,10 @@ public final class FloodlightPage implements LightingConsolePage {
     public LightingConsolePage.Control hit(LightingConsoleBlock.Entity console, Vec3 point, boolean monitor) {
         int g = group(console);
         if (monitor) {
+            Control timer = timerHit(console, point);
+            if (timer != null) {
+                return timer;
+            }
             if (row(3, REAL_LIGHT_ROW).contains(point.x, point.y)) {
                 boolean real = ConsoleSettings.realLight(console, g);
                 return new Thing(row(3, REAL_LIGHT_ROW), true, text("real_light"),
@@ -401,6 +438,44 @@ public final class FloodlightPage implements LightingConsolePage {
             return new Thing(beamKnob(2), false, text("level"), () -> LightingText.number(ConsoleSettings.maxLevel(console, g)))
                     .onScroll((step, shift) -> send(console, ConsolePacket.Action.MAX_LEVEL, 0,
                             ConsoleSettings.maxLevel(console, g) + step));
+        }
+        return null;
+    }
+
+    /** The timers on the middle monitor: the switch for them all, and each timer's switch, time and scene. */
+    @Nullable
+    private static Control timerHit(LightingConsoleBlock.Entity console, Vec3 point) {
+        if (row(2, TIMERS_ROW).contains(point.x, point.y)) {
+            return new Thing(row(2, TIMERS_ROW), true, text("timers"),
+                    () -> LightingText.on(ConsoleSettings.view(console).timersOn()))
+                    .onPress(shift -> send(console, ConsolePacket.Action.TIMERS_ON, 0,
+                            ConsoleSettings.view(console).timersOn() ? 0 : 1));
+        }
+        for (int i = 0; i < ConsoleSettings.TIMERS; i++) {
+            int index = i;
+            java.util.function.Supplier<ConsoleSettings.Timer> timer = () -> ConsoleSettings.view(console).timers()[index];
+            Area on = timerPart(TIMER_ON, i);
+            Area time = timerPart(TIMER_TIME, i);
+            Area scene = timerPart(TIMER_SCENE, i);
+            if (on.contains(point.x, point.y)) {
+                return new Thing(on, true, text("timer", index + 1), () -> LightingText.on(timer.get().on()))
+                        .onPress(shift -> send(console, ConsolePacket.Action.TIMER_ON, index, timer.get().on() ? 0 : 1));
+            }
+            if (time.contains(point.x, point.y)) {
+                // 15 minutes a step, an hour sneaking: a day's 1000 ticks an hour.
+                return new Thing(time, true, text("timer_time", index + 1),
+                        () -> LightingText.number(clock(timer.get().time())))
+                        .onScroll((step, shift) -> send(console, ConsolePacket.Action.TIMER_TIME, index,
+                                timer.get().time() + step * (shift ? 1000 : 250)));
+            }
+            if (scene.contains(point.x, point.y)) {
+                return new Thing(scene, true, text("timer_scene", index + 1),
+                        () -> text("scene." + timer.get().scene()))
+                        .onPress(shift -> send(console, ConsolePacket.Action.TIMER_SCENE, index,
+                                timer.get().scene() + (shift ? -1 : 1)))
+                        .onScroll((step, shift) -> send(console, ConsolePacket.Action.TIMER_SCENE, index,
+                                timer.get().scene() + step));
+            }
         }
         return null;
     }

@@ -32,7 +32,6 @@
   "create_large_lights.console.color": "White",
   "create_large_lights.console.temperature": "Colour temperature: %s",
   "create_large_lights.console.custom": "custom",
-  "create_large_lights.console.color_help": "Keys: temperatures · knobs: fine",
   "create_large_lights.console.temperature_key": "Colour temperature",
   "create_large_lights.console.beam": "Beam",
   "create_large_lights.console.range": "Reach",
@@ -48,5 +47,16 @@
   "create_large_lights.console.motion_now": "Motion: %s",
   "create_large_lights.console.target_now": "Follows: %s",
   "create_large_lights.console.motion": "Motion",
-  "create_large_lights.console.target": "Player to follow"
+  "create_large_lights.console.target": "Player to follow",
+  "block.create_large_lights.light_pole": "Light Pole",
+  "block.create_large_lights.street_light": "Street Light",
+  "item.create_large_lights.light_meter": "Light Meter",
+  "create_large_lights.message.street_light.auto": "Lights at dusk, goes out at dawn (and on redstone)",
+  "create_large_lights.message.street_light.redstone": "Lights on redstone only",
+  "create_large_lights.light_meter.reading": "Here: light %s (lamps %s · sky %s) · %s dark spots around",
+  "create_large_lights.console.timers_now": "Timers %s · now %s",
+  "create_large_lights.console.timers": "Timers (all)",
+  "create_large_lights.console.timer": "Timer %s",
+  "create_large_lights.console.timer_time": "Timer %s time (scroll: 15 min, sneak: 1 h)",
+  "create_large_lights.console.timer_scene": "Timer %s scene"
 }

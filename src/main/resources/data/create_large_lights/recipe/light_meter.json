@@ -1,0 +1,24 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "tools",
+  "pattern": [
+    " G ",
+    "SCS",
+    " S "
+  ],
+  "key": {
+    "G": {
+      "item": "minecraft:glass_pane"
+    },
+    "S": {
+      "item": "create:iron_sheet"
+    },
+    "C": {
+      "item": "minecraft:daylight_detector"
+    }
+  },
+  "result": {
+    "id": "create_large_lights:light_meter",
+    "count": 1
+  }
+}

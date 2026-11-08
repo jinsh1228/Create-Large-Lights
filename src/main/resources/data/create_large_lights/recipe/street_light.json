@@ -1,0 +1,26 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "pattern": [
+    "SSS",
+    "PDL"
+  ],
+  "key": {
+    "S": {
+      "item": "create:iron_sheet"
+    },
+    "P": {
+      "item": "create_large_lights:light_pole"
+    },
+    "D": {
+      "item": "minecraft:daylight_detector"
+    },
+    "L": {
+      "item": "minecraft:redstone_lamp"
+    }
+  },
+  "result": {
+    "id": "create_large_lights:street_light",
+    "count": 1
+  }
+}

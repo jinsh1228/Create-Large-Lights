@@ -16,5 +16,7 @@ public class CreateLargeLightsClient {
         NeoForge.EVENT_BUS.addListener(FloodlightAiming::onInteract);
         NeoForge.EVENT_BUS.addListener(FloodlightAiming::tick);
         FloodlightPage.register();
+        NeoForge.EVENT_BUS.addListener(LightMeter::tick);
+        NeoForge.EVENT_BUS.addListener(LightMeter::render);
     }
 }

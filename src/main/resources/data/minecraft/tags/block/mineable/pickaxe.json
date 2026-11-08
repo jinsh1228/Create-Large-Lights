@@ -1,6 +1,8 @@
 {
   "values": [
     "create_large_lights:floodlight",
-    "create_large_lights:stadium_light"
+    "create_large_lights:stadium_light",
+    "create_large_lights:light_pole",
+    "create_large_lights:street_light"
   ]
 }
