@@ -1,11 +1,9 @@
 package io.github.jinsh1228.largelights;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
 
 import org.haruyq.createmediasystems.SableCompat;
 
+import it.unimi.dsi.fastutil.doubles.DoubleArrayList;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
@@ -33,14 +31,56 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * replaces anything but air or still water, and never takes away a light block it didn't place.
  */
 public final class RealLight {
-    /** Ticks between looks at whether the beam changed (spread over floodlights by position). */
+    /** Ticks between looks at whether the beam changed (spread over lights by position). */
     static final int CHECK = 10;
     /** Ticks after which the faces are traced again even with the beam unchanged: blocks may have moved. */
     static final int REFRESH = 200;
     /** The most beam samples across, either way. */
     static final int MAX_GRID = 41;
+    /** Each grid's disk samples (u, v pairs), made once. */
+    private static final double[][] DISKS = new double[MAX_GRID + 1][];
 
     private RealLight() {
+    }
+
+    /** The light blocks one light placed, and what it last placed them for. */
+    public static final class Placed {
+        final LongSet lights = new LongOpenHashSet();
+        int signature;
+        long updated = Long.MIN_VALUE;
+
+        public int size() {
+            return lights.size();
+        }
+
+        public long[] toArray() {
+            return lights.toLongArray();
+        }
+
+        void load(long[] saved) {
+            lights.clear();
+            for (long packed : saved) {
+                lights.add(packed);
+            }
+        }
+    }
+
+    /**
+     * A beam as it lights the world: from {@code from} (outside the light's own block) along {@code forward},
+     * {@code tangent} wide, {@code range} long, laid over at most {@code radius} blocks either way across the surface
+     * it falls on, at light level {@code brightness}.
+     */
+    record Cast(Vec3 from, Vec3 forward, Vec3 right, Vec3 up, double tangent, double range, int radius, int brightness) {
+        /** Aimed by yaw and pitch (Aim), from just outside the block at {@code pos}. */
+        static Cast aimed(BlockPos pos, float yaw, float pitch, float spread, double range, int radius, int brightness) {
+            var head = Aim.head(yaw, pitch);
+            org.joml.Vector3f f = head.transformDirection(new org.joml.Vector3f(0, 0, 1)).normalize();
+            org.joml.Vector3f r = head.transformDirection(new org.joml.Vector3f(1, 0, 0)).normalize();
+            org.joml.Vector3f u = head.transformDirection(new org.joml.Vector3f(0, 1, 0)).normalize();
+            Vec3 forward = new Vec3(f.x, f.y, f.z);
+            return new Cast(Vec3.atCenterOf(pos).add(forward), forward, new Vec3(r.x, r.y, r.z), new Vec3(u.x, u.y, u.z),
+                    Math.tan(Math.toRadians(spread) / 2), range, radius, brightness);
+        }
     }
 
     /** The light level of a beam at {@code strength} (0 to 1): off at 0, else at least 1. */
@@ -53,76 +93,118 @@ public final class RealLight {
         return Mth.clamp(Mth.ceil(2 * radius / spacing) + 1, 1, MAX_GRID);
     }
 
-    /** The {@code grid}×{@code grid} samples of the unit disk (u, v), the middle first. */
-    static List<double[]> disk(int grid) {
-        List<double[]> samples = new ArrayList<>();
-        samples.add(new double[]{0, 0});
-        if (grid <= 1) {
-            return samples;
+    /** The {@code grid}×{@code grid} samples of the unit disk, as (u, v) pairs, the middle first. Shared: not to change. */
+    static double[] disk(int grid) {
+        grid = Mth.clamp(grid, 1, MAX_GRID);
+        double[] disk = DISKS[grid];
+        if (disk != null) {
+            return disk;
         }
-        for (int i = 0; i < grid; i++) {
+        DoubleArrayList samples = new DoubleArrayList();
+        samples.add(0);
+        samples.add(0);
+        for (int i = 0; grid > 1 && i < grid; i++) {
             for (int j = 0; j < grid; j++) {
                 double u = -1 + 2.0 * i / (grid - 1);
                 double v = -1 + 2.0 * j / (grid - 1);
                 if (u * u + v * v <= 1.0001 && (Math.abs(u) > 1e-9 || Math.abs(v) > 1e-9)) {
-                    samples.add(new double[]{u, v});
+                    samples.add(u);
+                    samples.add(v);
                 }
             }
         }
-        return samples;
+        disk = samples.toDoubleArray();
+        DISKS[grid] = disk;
+        return disk;
+    }
+
+    /** Whether it is this light's turn to look (every CHECK ticks, spread over lights by position). */
+    static boolean due(Level level, BlockPos pos) {
+        return !level.isClientSide && Math.floorMod(level.getGameTime() + pos.hashCode(), CHECK) == 0;
+    }
+
+    /**
+     * Places {@code placed}'s light blocks for {@code cast} (or takes them all away, at brightness 0), if its
+     * {@code signature} changed or REFRESH ticks have passed; true if any changed. The cast is only made then.
+     */
+    static boolean update(Level level, BlockPos pos, Placed placed, int signature, java.util.function.Supplier<Cast> cast) {
+        long now = level.getGameTime();
+        if (signature == placed.signature && now - placed.updated < REFRESH) {
+            return false;
+        }
+        placed.signature = signature;
+        placed.updated = now;
+        Cast beam = cast.get();
+        int spacing = FloodlightConfig.SPACING.get();
+        Long2LongOpenHashMap wanted = beam.brightness() == 0 ? new Long2LongOpenHashMap()
+                : footprint(level, pos, placed, beam, spacing, FloodlightConfig.MAX_LIGHTS.get());
+        return apply(level, placed.lights, wanted, beam.brightness());
+    }
+
+    /** Whether the block at {@code pos} rides a moving Sable structure: its light blocks would trail behind it. */
+    static boolean carried(Level level, BlockPos pos) {
+        Vec3 center = Vec3.atCenterOf(pos);
+        return !SableCompat.toWorld(level, pos, center).equals(center);
     }
 
     static void tick(Level level, BlockPos pos, FloodlightBlock.Entity light) {
-        if (level.isClientSide || (level.getGameTime() + pos.hashCode()) % CHECK != 0) {
+        if (!due(level, pos)) {
             return;
         }
-        FloodlightBlock.Entity.Beam beam = light.beam();
-        Vec3 center = Vec3.atCenterOf(pos);
-        // On a moving Sable structure the beam sweeps the world: light blocks would trail behind it.
-        boolean carried = !SableCompat.toWorld(level, pos, center).equals(center);
-        int brightness = FloodlightConfig.REAL_LIGHT.get() && !carried
+        // The quick look at its console; now and then CMS's full one, which follows a console that moved.
+        boolean full = Math.floorMod(level.getGameTime() + pos.hashCode(), REFRESH) < CHECK;
+        var owner = full ? light.controller() : light.quickController();
+        if (owner != null) {
+            ConsoleTimers.check(owner, level);
+        }
+        FloodlightBlock.Entity.Beam beam = light.beam(owner);
+        int brightness = FloodlightConfig.REAL_LIGHT.get() && !carried(level, pos)
                 ? Math.min(lightLevel(beam.strength()), beam.lightLimit()) : 0;
-        int spacing = FloodlightConfig.SPACING.get();
         // The aim with the console's pan and tilt; a group's motion moves the beam, not the light blocks.
-        int signature = Objects.hash(brightness, beam.yaw(), beam.pitch(), beam.spread(), beam.range(), spacing,
-                FloodlightConfig.MAX_LIGHTS.get());
-        long now = level.getGameTime();
-        if (signature == light.lightSignature && now - light.lightUpdated < REFRESH) {
-            return;
-        }
-        light.lightSignature = signature;
-        light.lightUpdated = now;
-        Long2LongOpenHashMap wanted = brightness == 0 ? new Long2LongOpenHashMap()
-                : footprint(level, pos, light, beam, spacing, FloodlightConfig.MAX_LIGHTS.get());
-        if (apply(level, light.lights, wanted, brightness)) {
+        int signature = signature(brightness, beam.yaw(), beam.pitch(), beam.spread(), beam.range());
+        if (update(level, pos, light.placed, signature, () -> Cast.aimed(pos, beam.yaw(), beam.pitch(), beam.spread(),
+                beam.range(), light.kind().radius, brightness))) {
             light.changed();
         }
     }
 
+    /** What a cast depends on, and the config: when it changes, the light blocks are placed again. */
+    static int signature(int brightness, float yaw, float pitch, float spread, float range) {
+        int hash = brightness;
+        hash = 31 * hash + Float.floatToIntBits(yaw);
+        hash = 31 * hash + Float.floatToIntBits(pitch);
+        hash = 31 * hash + Float.floatToIntBits(spread);
+        hash = 31 * hash + Float.floatToIntBits(range);
+        hash = 31 * hash + FloodlightConfig.SPACING.get();
+        return 31 * hash + FloodlightConfig.MAX_LIGHTS.get();
+    }
+
     /** Where the beam wants light blocks: air just off the faces it falls on, one in each spacing-sized cell. */
-    private static Long2LongOpenHashMap footprint(Level level, BlockPos pos, FloodlightBlock.Entity light,
-                                                  FloodlightBlock.Entity.Beam beam, int spacing, int max) {
-        var head = Aim.head(beam.yaw(), beam.pitch());
-        Vec3 forward = Aim.direction(beam.yaw(), beam.pitch());
-        org.joml.Vector3f r = head.transformDirection(new org.joml.Vector3f(1, 0, 0)).normalize();
-        org.joml.Vector3f u = head.transformDirection(new org.joml.Vector3f(0, 1, 0)).normalize();
-        Vec3 right = new Vec3(r.x, r.y, r.z);
-        Vec3 up = new Vec3(u.x, u.y, u.z);
-        double tangent = Math.tan(Math.toRadians(beam.spread()) / 2);
-        // Just outside the floodlight's own block, whichever way it points.
-        Vec3 from = Vec3.atCenterOf(pos).add(forward);
-        double range = beam.range();
+    private static Long2LongOpenHashMap footprint(Level level, BlockPos pos, Placed placed, Cast cast, int spacing,
+                                                  int max) {
+        Vec3 from = cast.from();
+        Vec3 forward = cast.forward();
+        double tangent = cast.tangent();
+        double range = cast.range();
         BlockHitResult middle = clip(level, from, from.add(forward.scale(range)));
         double distance = middle.getType() == HitResult.Type.BLOCK ? middle.getLocation().distanceTo(from) : range;
-        double radius = Math.min(distance * tangent, light.kind().radius);
+        double radius = Math.min(distance * tangent, cast.radius());
         // cell → position: the first sample to land in a cell has it.
         Long2LongOpenHashMap wanted = new Long2LongOpenHashMap();
-        for (double[] sample : disk(grid(radius, spacing))) {
-            if (wanted.size() >= max) {
-                break;
+        double[] disk = disk(grid(radius, spacing));
+        for (int i = 0; i < disk.length && wanted.size() < max; i += 2) {
+            BlockHitResult hit;
+            if (i == 0) {
+                hit = middle;
+            } else {
+                double u = disk[i] * tangent;
+                double v = disk[i + 1] * tangent;
+                double x = forward.x + cast.right().x * u + cast.up().x * v;
+                double y = forward.y + cast.right().y * u + cast.up().y * v;
+                double z = forward.z + cast.right().z * u + cast.up().z * v;
+                double scale = range / Math.sqrt(x * x + y * y + z * z);
+                hit = clip(level, from, from.add(x * scale, y * scale, z * scale));
             }
-            Vec3 aim = forward.add(right.scale(sample[0] * tangent)).add(up.scale(sample[1] * tangent)).normalize();
-            BlockHitResult hit = sample[0] == 0 && sample[1] == 0 ? middle : clip(level, from, from.add(aim.scale(range)));
             if (hit.getType() != HitResult.Type.BLOCK) {
                 continue;
             }
@@ -132,7 +214,7 @@ public final class RealLight {
             }
             long cell = BlockPos.asLong(Math.floorDiv(at.getX(), spacing), Math.floorDiv(at.getY(), spacing),
                     Math.floorDiv(at.getZ(), spacing));
-            if (!wanted.containsKey(cell) && placeable(level.getBlockState(at), light.lights.contains(at.asLong()))) {
+            if (!wanted.containsKey(cell) && placeable(level.getBlockState(at), placed.lights.contains(at.asLong()))) {
                 wanted.put(cell, at.asLong());
             }
         }
@@ -191,15 +273,15 @@ public final class RealLight {
         return changed;
     }
 
-    /** Takes away every light block {@code light} placed, as it is broken. */
-    static void clear(Level level, FloodlightBlock.Entity light) {
-        for (long packed : light.lights) {
+    /** Takes away every light block {@code placed} holds, as its light is broken. */
+    static void clear(Level level, Placed placed) {
+        for (long packed : placed.lights) {
             BlockPos at = BlockPos.of(packed);
             if (level.isLoaded(at)) {
                 remove(level, at);
             }
         }
-        light.lights.clear();
+        placed.lights.clear();
     }
 
     private static void remove(Level level, BlockPos at) {

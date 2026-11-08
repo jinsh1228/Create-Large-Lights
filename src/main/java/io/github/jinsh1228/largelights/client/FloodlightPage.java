@@ -60,7 +60,7 @@ public final class FloodlightPage implements LightingConsolePage {
                 if (level.isLoaded(pos) && level.getBlockEntity(pos) instanceof FloodlightBlock.Entity light
                         && light.group == console.settings.selectedGroup) {
                     count++;
-                    lights += light.lightBlocks().length;
+                    lights += light.lightCount();
                 }
             }
         }

@@ -12,8 +12,6 @@ import com.mojang.serialization.MapCodec;
 import com.simibubi.create.content.equipment.wrench.IWrenchable;
 
 import io.github.jinsh1228.largelights.client.FloodlightAiming;
-import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
-import it.unimi.dsi.fastutil.longs.LongSet;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -161,7 +159,7 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
     @Override
     protected void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean movedByPiston) {
         if (!state.is(newState.getBlock()) && !level.isClientSide && level.getBlockEntity(pos) instanceof Entity light) {
-            RealLight.clear(level, light);
+            RealLight.clear(level, light.placed);
             if (!movedByPiston) {
                 light.unlink();
             }
@@ -186,10 +184,11 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
         public float pitch = 90;
         /** Unlinked: which of its kind's beam widths (FloodlightKind.spread); -1 for the kind's default. */
         public int spread = -1;
-        /** The light blocks it placed (RealLight), as BlockPos.asLong. */
-        final LongSet lights = new LongOpenHashSet();
-        int lightSignature;
-        long lightUpdated = Long.MIN_VALUE;
+        /** The light blocks it placed (RealLight). */
+        final RealLight.Placed placed = new RealLight.Placed();
+        /** The renderer's state for this floodlight (client only): its traced beam and its eased aim. */
+        public Object renderTrace;
+        public Object renderMotion;
 
         public Entity(BlockPos pos, BlockState state) {
             super(CreateLargeLights.FLOODLIGHT_ENTITY.get(), pos, state);
@@ -218,16 +217,20 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
         }
 
         public Beam beam() {
-            LightingConsoleBlock.Entity owner = controller();
+            return beam(controller());
+        }
+
+        /** As {@link #beam()}, run by {@code owner} (this floodlight's controller, or null). */
+        public Beam beam(@Nullable LightingConsoleBlock.Entity owner) {
             if (owner != null) {
                 LightingSettings.Group settings = owner.settings.groups[group];
                 float strength = owner.formed && owner.settings.enabled ? owner.settings.master * settings.brightness : 0;
                 float[] aim = Aim.offset(yaw, pitch, settings.pan, settings.tilt);
                 // Beam width and real light are the floodlight page's (ConsoleSettings): a stage light's spread stops at 70°.
+                ConsoleSettings.View view = ConsoleSettings.view(owner);
                 return new Beam(owner, settings, Mth.clamp(strength, 0, 1),
-                        Mth.clamp(ConsoleSettings.spread(owner, group), 1, kind().maxSpread()),
-                        Mth.clamp(settings.range, 2, LightingSettings.MAX_RANGE), aim[0], aim[1],
-                        ConsoleSettings.lightLimit(owner, group));
+                        Mth.clamp(view.spread()[group], 1, kind().maxSpread()),
+                        Mth.clamp(settings.range, 2, LightingSettings.MAX_RANGE), aim[0], aim[1], view.lightLimit(group));
             }
             // Linked to a console that isn't here (unloaded): dark till it is.
             float strength = console != null ? 0 : getBlockState().getValue(POWER) / 15f;
@@ -243,9 +246,27 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
             changed();
         }
 
+        /**
+         * Its controller as the server looks at it often: the console it names, if that console still runs it.
+         * Without CMS's link repair (controller()), which looks over all the console's fixtures; the console runs
+         * that itself every second, and RealLight asks controller() now and then for consoles that moved.
+         */
+        @Nullable
+        LightingConsoleBlock.Entity quickController() {
+            if (console == null || level == null || !level.isLoaded(console)
+                    || !(level.getBlockEntity(console) instanceof LightingConsoleBlock.Entity owner)) {
+                return null;
+            }
+            return owner.controller() == owner && owner.fixtures.contains(worldPosition) ? owner : null;
+        }
+
         /** The light blocks it keeps in the world, as BlockPos.asLong. */
         public long[] lightBlocks() {
-            return lights.toLongArray();
+            return placed.toArray();
+        }
+
+        public int lightCount() {
+            return placed.size();
         }
 
         /** Floodlights share the console's floodlight page (client.FloodlightPage), so a group holds only them. */
@@ -275,7 +296,7 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
                     LightingText.number(Math.round(-beam.pitch()) + "°")).withColor(LightingText.TEXT));
             tooltip.add(Component.translatable("create_large_lights.tooltip.real_light",
                     LightingText.number(Math.min(RealLight.lightLevel(beam.strength()), beam.lightLimit())),
-                    LightingText.number(lights.size())).withColor(LightingText.TEXT));
+                    LightingText.number(placed.size())).withColor(LightingText.TEXT));
             return true;
         }
 
@@ -285,7 +306,7 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
             tag.putFloat("AimYaw", yaw);
             tag.putFloat("AimPitch", pitch);
             tag.putInt("Spread", spread);
-            tag.putLongArray("LightBlocks", lights.toLongArray());
+            tag.putLongArray("LightBlocks", placed.toArray());
         }
 
         @Override
@@ -294,10 +315,7 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
             yaw = Mth.wrapDegrees(tag.getFloat("AimYaw"));
             pitch = tag.contains("AimPitch") ? Mth.clamp(tag.getFloat("AimPitch"), Aim.MIN_PITCH, Aim.MAX_PITCH) : 90;
             spread = tag.contains("Spread") ? tag.getInt("Spread") : -1;
-            lights.clear();
-            for (long packed : tag.getLongArray("LightBlocks")) {
-                lights.add(packed);
-            }
+            placed.load(tag.getLongArray("LightBlocks"));
         }
     }
 }

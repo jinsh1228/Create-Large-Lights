@@ -1,8 +1,5 @@
 package io.github.jinsh1228.largelights.client;
 
-import java.util.Map;
-import java.util.WeakHashMap;
-
 import org.haruyq.createmediasystems.CreateMediaSystems;
 import org.haruyq.createmediasystems.SableCompat;
 import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
@@ -41,17 +38,84 @@ import net.minecraft.world.phys.Vec3;
  * (LightingIllumination), and a faint cone shows it in the air, stopped where each edge meets a block.
  */
 public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightBlock.Entity> {
-    private static final RenderType BODY = RenderType.entityCutoutNoCull(
-            CreateMediaSystems.id("textures/block/blu_ray_player_side.png"));
+    private static final int EDGES = 16;
+    private static final int STEPS = 8;
+    /** The lighting console's brushed frame and riveted casing, as CMS's stage lights wear them. */
+    private static final RenderType FRAME = RenderType.entityCutoutNoCull(
+            CreateMediaSystems.id("textures/block/lighting_console_frame.png"));
+    private static final RenderType CASING = RenderType.entityCutoutNoCull(
+            CreateMediaSystems.id("textures/block/lighting_console_casing.png"));
+    /** Boxes, 7 floats each: x0, y0, z0, x1, y1, z1, colour. The mount's in its own space (+Y away from the wall). */
+    private static final float[] FLOODLIGHT_MOUNT = {
+            -0.3f, -0.5f, -0.3f, 0.3f, -0.43f, 0.3f, 0x8A8C98,
+            -0.065f, -0.43f, -0.065f, 0.065f, -0.06f, 0.065f, 0x9A9CA8};
+    private static final float[] STADIUM_MOUNT = {
+            -0.46f, -0.5f, -0.46f, 0.46f, -0.43f, 0.46f, 0x8A8C98,
+            -0.1f, -0.43f, -0.1f, 0.1f, -0.06f, 0.1f, 0x9A9CA8};
+    /** The head's, in its own space (the beam along +Z): its frame, then its casing. */
+    private static final float[] FLOODLIGHT_FRAME = boxes(
+            new float[]{-0.11f, -0.11f, -0.11f, 0.11f, 0.11f, 0.11f, 0x8A8C98,
+                    -0.43f, -0.43f, 0.13f, 0.43f, -0.36f, 0.17f, 0xB1B3BE,
+                    -0.43f, 0.36f, 0.13f, 0.43f, 0.43f, 0.17f, 0xB1B3BE,
+                    -0.43f, -0.36f, 0.13f, -0.36f, 0.36f, 0.17f, 0xB1B3BE,
+                    0.36f, -0.36f, 0.13f, 0.43f, 0.36f, 0.17f, 0xB1B3BE},
+            4, i -> new float[]{-0.34f, -0.325f + i * 0.2f, -0.29f, 0.34f, -0.275f + i * 0.2f, -0.2f, 0x9A9CA8});
+    private static final float[] FLOODLIGHT_CASING = {-0.4f, -0.4f, -0.2f, 0.4f, 0.4f, 0.13f, 0xFFFFFF};
+    private static final float[] STADIUM_FRAME = boxes(
+            new float[]{-0.11f, -0.11f, -0.11f, 0.11f, 0.11f, 0.11f, 0x8A8C98,
+                    -0.98f, -0.64f, 0.08f, -0.92f, 0.64f, 0.1f, 0xB1B3BE,
+                    0.92f, -0.64f, 0.08f, 0.98f, 0.64f, 0.1f, 0xB1B3BE,
+                    -0.98f, -0.64f, 0.08f, 0.98f, -0.6f, 0.1f, 0xB1B3BE,
+                    -0.98f, 0.6f, 0.08f, 0.98f, 0.64f, 0.1f, 0xB1B3BE,
+                    -0.98f, -0.02f, 0.08f, 0.98f, 0.02f, 0.1f, 0xB1B3BE,
+                    -0.33f, -0.64f, 0.08f, -0.29f, 0.64f, 0.1f, 0xB1B3BE,
+                    0.29f, -0.64f, 0.08f, 0.33f, 0.64f, 0.1f, 0xB1B3BE},
+            5, i -> new float[]{-0.83f + i * 0.4f, -0.55f, -0.27f, -0.77f + i * 0.4f, 0.55f, -0.17f, 0x9A9CA8});
+    private static final float[] STADIUM_CASING = {-0.98f, -0.64f, -0.17f, 0.98f, 0.64f, 0.08f, 0xFFFFFF};
+    /** The lenses, 4 floats each: x0, y0, x1, y1 (at the lens's z). */
+    private static final float[] FLOODLIGHT_LENSES = {-0.36f, -0.36f, 0.36f, 0.36f};
+    private static final float[] STADIUM_LENSES = lenses();
+    /** The beam's edges round its axis: cosines and sines. */
+    private static final double[] COS = new double[EDGES];
+    private static final double[] SIN = new double[EDGES];
+    /** Closer than this (blocks), the beam in the air is drawn in full; further, in half the steps. */
+    private static final float NEAR = 48;
     /** Unlinked, on redstone: a hall's warm white. */
     public static final int WARM_WHITE = 0xFFF1DC;
     private static final int OFF_LENS = 0x1C232D;
     /** Of the overlay, with real light under it. */
     private static final float REAL_LIGHT_OVERLAY = 0.4f;
-    private static final int EDGES = 16;
-    private static final int STEPS = 8;
-    private static final Map<FloodlightBlock.Entity, Trace> TRACES = new WeakHashMap<>();
-    private static final Map<FloodlightBlock.Entity, AimMotion> MOTION = new WeakHashMap<>();
+
+    static {
+        for (int i = 0; i < EDGES; i++) {
+            COS[i] = Math.cos(Math.PI * 2 * i / EDGES);
+            SIN[i] = Math.sin(Math.PI * 2 * i / EDGES);
+        }
+    }
+
+    private static float[] boxes(float[] first, int count, java.util.function.IntFunction<float[]> more) {
+        float[] all = java.util.Arrays.copyOf(first, first.length + count * 7);
+        for (int i = 0; i < count; i++) {
+            System.arraycopy(more.apply(i), 0, all, first.length + i * 7, 7);
+        }
+        return all;
+    }
+
+    private static float[] lenses() {
+        float[] lenses = new float[6 * 4];
+        for (int row = 0; row < 2; row++) {
+            for (int col = 0; col < 3; col++) {
+                int i = (row * 3 + col) * 4;
+                float x = -0.62f + col * 0.62f;
+                float y = -0.31f + row * 0.62f;
+                lenses[i] = x - 0.26f;
+                lenses[i + 1] = y - 0.26f;
+                lenses[i + 2] = x + 0.26f;
+                lenses[i + 3] = y + 0.26f;
+            }
+        }
+        return lenses;
+    }
 
     FloodlightRenderer(BlockEntityRendererProvider.Context context) {
     }
@@ -80,39 +144,12 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         Matrix4f local = Aim.head(aim[0], aim[1]);
         Matrix4f head = new Matrix4f(model).mul(local);
 
-        VertexConsumer body = buffers.getBuffer(BODY);
-        float plate = stadium ? 0.46f : 0.3f;
-        float stem = stadium ? 0.1f : 0.065f;
-        box(body, mount, -plate, -0.5f, -plate, plate, -0.43f, plate, 0x5E626C, light);
-        box(body, mount, -stem, -0.43f, -stem, stem, -0.06f, stem, 0x6E727E, light);
-        box(body, head, -0.11f, -0.11f, -0.11f, 0.11f, 0.11f, 0.11f, 0x4C505A, light);
-        float lensZ;
-        if (stadium) {
-            lensZ = 0.1f;
-            box(body, head, -0.98f, -0.64f, -0.17f, 0.98f, 0.64f, 0.08f, 0x8D929E, light);
-            box(body, head, -0.98f, -0.64f, 0.08f, -0.92f, 0.64f, 0.1f, 0xA9AEBA, light);
-            box(body, head, 0.92f, -0.64f, 0.08f, 0.98f, 0.64f, 0.1f, 0xA9AEBA, light);
-            box(body, head, -0.98f, -0.64f, 0.08f, 0.98f, -0.6f, 0.1f, 0xA9AEBA, light);
-            box(body, head, -0.98f, 0.6f, 0.08f, 0.98f, 0.64f, 0.1f, 0xA9AEBA, light);
-            box(body, head, -0.98f, -0.02f, 0.08f, 0.98f, 0.02f, 0.1f, 0xA9AEBA, light);
-            box(body, head, -0.33f, -0.64f, 0.08f, -0.29f, 0.64f, 0.1f, 0xA9AEBA, light);
-            box(body, head, 0.29f, -0.64f, 0.08f, 0.33f, 0.64f, 0.1f, 0xA9AEBA, light);
-            for (int fin = 0; fin < 5; fin++) {
-                float x = -0.8f + fin * 0.4f;
-                box(body, head, x - 0.03f, -0.55f, -0.27f, x + 0.03f, 0.55f, -0.17f, 0x6E727E, light);
-            }
-        } else {
-            lensZ = 0.15f;
-            box(body, head, -0.4f, -0.4f, -0.2f, 0.4f, 0.4f, 0.13f, 0x8D929E, light);
-            box(body, head, -0.43f, -0.43f, 0.13f, 0.43f, -0.36f, 0.17f, 0xA9AEBA, light);
-            box(body, head, -0.43f, 0.36f, 0.13f, 0.43f, 0.43f, 0.17f, 0xA9AEBA, light);
-            box(body, head, -0.43f, -0.36f, 0.13f, -0.36f, 0.36f, 0.17f, 0xA9AEBA, light);
-            box(body, head, 0.36f, -0.36f, 0.13f, 0.43f, 0.36f, 0.17f, 0xA9AEBA, light);
-            for (int fin = 0; fin < 4; fin++) {
-                float y = -0.3f + fin * 0.2f;
-                box(body, head, -0.34f, y - 0.025f, -0.29f, 0.34f, y + 0.025f, -0.2f, 0x6E727E, light);
-            }
-        }
+        float lensZ = stadium ? 0.1f : 0.15f;
+        float[] normals = new float[18];
+        VertexConsumer frame = buffers.getBuffer(FRAME);
+        boxes(frame, mount, normals(mount, normals), stadium ? STADIUM_MOUNT : FLOODLIGHT_MOUNT, light);
+        boxes(frame, head, normals(head, normals), stadium ? STADIUM_FRAME : FLOODLIGHT_FRAME, light);
+        boxes(buffers.getBuffer(CASING), head, normals, stadium ? STADIUM_CASING : FLOODLIGHT_CASING, light);
         if (LightingRenderer.shadowPass()) {
             return;
         }
@@ -141,16 +178,9 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
 
         VertexConsumer lens = buffers.getBuffer(LightingRenderer.lensType());
         int lensColor = strength > 0.001f ? LightingSettings.mix(color, 0xFFFFFF, 0.35f) : OFF_LENS;
-        if (stadium) {
-            for (int row = 0; row < 2; row++) {
-                for (int col = 0; col < 3; col++) {
-                    float x = -0.62f + col * 0.62f;
-                    float y = -0.31f + row * 0.62f;
-                    lensQuad(lens, head, x - 0.26f, y - 0.26f, x + 0.26f, y + 0.26f, lensZ, lensColor);
-                }
-            }
-        } else {
-            lensQuad(lens, head, -0.36f, -0.36f, 0.36f, 0.36f, lensZ, lensColor);
+        float[] lenses = stadium ? STADIUM_LENSES : FLOODLIGHT_LENSES;
+        for (int i = 0; i < lenses.length; i += 4) {
+            lensQuad(lens, head, lenses[i], lenses[i + 1], lenses[i + 2], lenses[i + 3], lensZ, lensColor);
         }
         if (strength <= 0.001f) {
             return;
@@ -162,14 +192,20 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         Vec3 up = vector(local, new Vec3(0, 1, 0)).normalize();
         double halfAngle = Math.toRadians(beam.spread()) / 2;
         LightingRaycast rays = new LightingRaycast(level, lamp.getBlockPos(), true);
-        Trace trace = TRACES.computeIfAbsent(lamp, ignored -> new Trace());
+        if (!(lamp.renderTrace instanceof Trace)) {
+            lamp.renderTrace = new Trace();
+        }
+        Trace trace = (Trace) lamp.renderTrace;
         trace.update(lamp, rays, origin, direction, right, up, Math.tan(halfAngle), beam.range());
         MultiBufferSource effects = LightingRenderer.beamBuffers(level, buffers);
         LightingIllumination.render(lamp, origin, direction, halfAngle, beam.range(), strength * overlay(kind), color,
                 trace.center,
                 rays, model, effects, kind.radius);
+        // The camera is at the frame's origin: the pose's translation is how far off the floodlight is.
+        float distanceSqr = model.m30() * model.m30() + model.m31() * model.m31() + model.m32() * model.m32();
         cone(effects.getBuffer(LightingRenderer.beamType()), model, trace, origin, right, up,
-                stadium ? 0.85f : 0.36f, stadium ? 0.55f : 0.36f, color, strength * kind.haze);
+                stadium ? 0.85f : 0.36f, stadium ? 0.55f : 0.36f, color, strength * kind.haze,
+                distanceSqr < NEAR * NEAR ? STEPS : STEPS / 2);
     }
 
     /**
@@ -208,8 +244,10 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
                 }
             }
         }
-        return MOTION.computeIfAbsent(lamp, ignored -> new AimMotion())
-                .update(seconds, yaw, Mth.clamp(pitch, Aim.MIN_PITCH, Aim.MAX_PITCH), hold);
+        if (!(lamp.renderMotion instanceof AimMotion)) {
+            lamp.renderMotion = new AimMotion();
+        }
+        return ((AimMotion) lamp.renderMotion).update(seconds, yaw, Mth.clamp(pitch, Aim.MIN_PITCH, Aim.MAX_PITCH), hold);
     }
 
     /**
@@ -224,7 +262,8 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
     /** Where the beam's middle and edges meet blocks, traced again only when something that matters changed. */
     private static final class Trace {
         LightingRaycast.Hit center;
-        final Vec3[] edges = new Vec3[EDGES];
+        /** Each edge's unit direction, x, y, z. */
+        final double[] edges = new double[EDGES * 3];
         final double[] lengths = new double[EDGES];
         long traced = -2;
         /** Where the beam left from in the world: it moves with a Sable structure the floodlight is on. */
@@ -254,10 +293,10 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
             center = rays.clip(from, SableCompat.toRenderWorld(level, lamp.getBlockPos(),
                     origin.add(direction.scale(range)).add(anchor)));
             for (int i = 0; i < EDGES; i++) {
-                double angle = Math.PI * 2 * i / EDGES;
-                Vec3 aim = direction.add(right.scale(Math.cos(angle) * tangent)).add(up.scale(Math.sin(angle) * tangent))
-                        .normalize();
-                edges[i] = aim;
+                Vec3 aim = direction.add(right.scale(COS[i] * tangent)).add(up.scale(SIN[i] * tangent)).normalize();
+                edges[i * 3] = aim.x;
+                edges[i * 3 + 1] = aim.y;
+                edges[i * 3 + 2] = aim.z;
                 LightingRaycast.Hit hit = rays.clip(from, SableCompat.toRenderWorld(level, lamp.getBlockPos(),
                         origin.add(aim.scale(range)).add(anchor)));
                 lengths[i] = hit.block().getType() == HitResult.Type.BLOCK
@@ -269,73 +308,100 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
 
     /**
      * The beam in the air: from the lens's outline ({@code width} by {@code height} across) out along each edge,
-     * each strip as far as the nearer of its two edges reaches, fading as it goes.
+     * each strip as far as the nearer of its two edges reaches, fading as it goes, in {@code steps} along.
      */
     private static void cone(VertexConsumer out, Matrix4f matrix, Trace trace, Vec3 origin, Vec3 right, Vec3 up,
-                             float width, float height, int color, float alpha) {
+                             float width, float height, int color, float alpha, int steps) {
         if (alpha < 1) {
             return;
         }
+        int r = color >> 16 & 255, g = color >> 8 & 255, b = color & 255;
+        double[] e = trace.edges;
         for (int i = 0; i < EDGES; i++) {
             int next = (i + 1) % EDGES;
             double length = Math.min(trace.lengths[i], trace.lengths[next]);
-            Vec3 startA = rim(origin, right, up, width, height, i);
-            Vec3 startB = rim(origin, right, up, width, height, next);
-            for (int step = 0; step < STEPS; step++) {
-                double t0 = length * step / STEPS;
-                double t1 = length * (step + 1) / STEPS;
-                int alpha0 = Math.round(alpha * (1 - 0.85f * step / STEPS));
-                int alpha1 = Math.round(alpha * (1 - 0.85f * (step + 1) / STEPS));
-                vertex(out, matrix, startA.add(trace.edges[i].scale(t0)), color, alpha0);
-                vertex(out, matrix, startB.add(trace.edges[next].scale(t0)), color, alpha0);
-                vertex(out, matrix, startB.add(trace.edges[next].scale(t1)), color, alpha1);
-                vertex(out, matrix, startA.add(trace.edges[i].scale(t1)), color, alpha1);
+            double ax = origin.x + right.x * COS[i] * width + up.x * SIN[i] * height;
+            double ay = origin.y + right.y * COS[i] * width + up.y * SIN[i] * height;
+            double az = origin.z + right.z * COS[i] * width + up.z * SIN[i] * height;
+            double bx = origin.x + right.x * COS[next] * width + up.x * SIN[next] * height;
+            double by = origin.y + right.y * COS[next] * width + up.y * SIN[next] * height;
+            double bz = origin.z + right.z * COS[next] * width + up.z * SIN[next] * height;
+            int ai = i * 3, bi = next * 3;
+            for (int step = 0; step < steps; step++) {
+                double t0 = length * step / steps;
+                double t1 = length * (step + 1) / steps;
+                int alpha0 = Mth.clamp(Math.round(alpha * (1 - 0.85f * step / steps)), 0, 255);
+                int alpha1 = Mth.clamp(Math.round(alpha * (1 - 0.85f * (step + 1) / steps)), 0, 255);
+                out.addVertex(matrix, (float) (ax + e[ai] * t0), (float) (ay + e[ai + 1] * t0), (float) (az + e[ai + 2] * t0))
+                        .setColor(r, g, b, alpha0);
+                out.addVertex(matrix, (float) (bx + e[bi] * t0), (float) (by + e[bi + 1] * t0), (float) (bz + e[bi + 2] * t0))
+                        .setColor(r, g, b, alpha0);
+                out.addVertex(matrix, (float) (bx + e[bi] * t1), (float) (by + e[bi + 1] * t1), (float) (bz + e[bi + 2] * t1))
+                        .setColor(r, g, b, alpha1);
+                out.addVertex(matrix, (float) (ax + e[ai] * t1), (float) (ay + e[ai + 1] * t1), (float) (az + e[ai + 2] * t1))
+                        .setColor(r, g, b, alpha1);
             }
         }
     }
 
-    private static Vec3 rim(Vec3 origin, Vec3 right, Vec3 up, float width, float height, int edge) {
-        double angle = Math.PI * 2 * edge / EDGES;
-        return origin.add(right.scale(Math.cos(angle) * width)).add(up.scale(Math.sin(angle) * height));
-    }
-
     private static void lensQuad(VertexConsumer out, Matrix4f matrix, float x0, float y0, float x1, float y1, float z,
                                  int color) {
-        vertex(out, matrix, new Vec3(x0, y0, z), color, 255);
-        vertex(out, matrix, new Vec3(x1, y0, z), color, 255);
-        vertex(out, matrix, new Vec3(x1, y1, z), color, 255);
-        vertex(out, matrix, new Vec3(x0, y1, z), color, 255);
+        int r = color >> 16 & 255, g = color >> 8 & 255, b = color & 255;
+        out.addVertex(matrix, x0, y0, z).setColor(r, g, b, 255);
+        out.addVertex(matrix, x1, y0, z).setColor(r, g, b, 255);
+        out.addVertex(matrix, x1, y1, z).setColor(r, g, b, 255);
+        out.addVertex(matrix, x0, y1, z).setColor(r, g, b, 255);
     }
 
-    private static void vertex(VertexConsumer out, Matrix4f matrix, Vec3 at, int color, int alpha) {
-        out.addVertex(matrix, (float) at.x, (float) at.y, (float) at.z)
-                .setColor(color >> 16 & 255, color >> 8 & 255, color & 255, Mth.clamp(alpha, 0, 255));
-    }
-
-    private static void box(VertexConsumer out, Matrix4f matrix, float x0, float y0, float z0, float x1, float y1,
-                            float z1, int color, int light) {
-        Vec3 a = new Vec3(x0, y0, z0), b = new Vec3(x1, y0, z0), c = new Vec3(x1, y1, z0), d = new Vec3(x0, y1, z0);
-        Vec3 e = new Vec3(x0, y0, z1), f = new Vec3(x1, y0, z1), g = new Vec3(x1, y1, z1), h = new Vec3(x0, y1, z1);
-        face(out, matrix, a, b, c, d, color, light, Direction.NORTH);
-        face(out, matrix, f, e, h, g, color, light, Direction.SOUTH);
-        face(out, matrix, e, a, d, h, color, light, Direction.WEST);
-        face(out, matrix, b, f, g, c, color, light, Direction.EAST);
-        face(out, matrix, d, c, g, h, color, light, Direction.UP);
-        face(out, matrix, e, f, b, a, color, light, Direction.DOWN);
-    }
-
-    private static void face(VertexConsumer out, Matrix4f matrix, Vec3 a, Vec3 b, Vec3 c, Vec3 d, int color, int light,
-                             Direction side) {
-        Vector3f normal = matrix.transformDirection(new Vector3f(side.getStepX(), side.getStepY(), side.getStepZ()))
-                .normalize();
-        Vec3[] corners = {a, b, c, d};
-        for (int i = 0; i < 4; i++) {
-            Vec3 at = corners[i];
-            out.addVertex(matrix, (float) at.x, (float) at.y, (float) at.z)
-                    .setColor(color >> 16 & 255, color >> 8 & 255, color & 255, 255)
-                    .setUv(i == 0 || i == 3 ? 0 : 1, i < 2 ? 1 : 0).setOverlay(OverlayTexture.NO_OVERLAY)
-                    .setLight(light).setNormal(normal.x, normal.y, normal.z);
+    /** The six face normals (north, south, west, east, up, down) through {@code matrix}, into {@code out}. */
+    private static float[] normals(Matrix4f matrix, float[] out) {
+        Vector3f n = new Vector3f();
+        for (int axis = 0; axis < 3; axis++) {
+            matrix.transformDirection(n.set(axis == 0 ? 1 : 0, axis == 1 ? 1 : 0, axis == 2 ? 1 : 0)).normalize();
+            // +X east, +Y up, +Z south; each face's is that or its opposite.
+            int plus = axis == 0 ? 3 : axis == 1 ? 4 : 1;
+            int minus = axis == 0 ? 2 : axis == 1 ? 5 : 0;
+            out[plus * 3] = n.x;
+            out[plus * 3 + 1] = n.y;
+            out[plus * 3 + 2] = n.z;
+            out[minus * 3] = -n.x;
+            out[minus * 3 + 1] = -n.y;
+            out[minus * 3 + 2] = -n.z;
         }
+        return out;
+    }
+
+    private static void boxes(VertexConsumer out, Matrix4f matrix, float[] normals, float[] boxes, int light) {
+        for (int i = 0; i < boxes.length; i += 7) {
+            box(out, matrix, normals, boxes[i], boxes[i + 1], boxes[i + 2], boxes[i + 3], boxes[i + 4], boxes[i + 5],
+                    (int) boxes[i + 6], light);
+        }
+    }
+
+    private static void box(VertexConsumer out, Matrix4f m, float[] n, float x0, float y0, float z0, float x1, float y1,
+                            float z1, int color, int light) {
+        int r = color >> 16 & 255, g = color >> 8 & 255, b = color & 255;
+        // North, south, west, east, up, down: four corners each, as the console's own boxes are wound.
+        quad(out, m, n, 0, x0, y0, z0, x1, y0, z0, x1, y1, z0, x0, y1, z0, r, g, b, light);
+        quad(out, m, n, 1, x1, y0, z1, x0, y0, z1, x0, y1, z1, x1, y1, z1, r, g, b, light);
+        quad(out, m, n, 2, x0, y0, z1, x0, y0, z0, x0, y1, z0, x0, y1, z1, r, g, b, light);
+        quad(out, m, n, 3, x1, y0, z0, x1, y0, z1, x1, y1, z1, x1, y1, z0, r, g, b, light);
+        quad(out, m, n, 4, x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1, r, g, b, light);
+        quad(out, m, n, 5, x0, y0, z1, x1, y0, z1, x1, y0, z0, x0, y0, z0, r, g, b, light);
+    }
+
+    private static void quad(VertexConsumer out, Matrix4f m, float[] n, int face, float ax, float ay, float az,
+                             float bx, float by, float bz, float cx, float cy, float cz, float dx, float dy, float dz,
+                             int r, int g, int b, int light) {
+        float nx = n[face * 3], ny = n[face * 3 + 1], nz = n[face * 3 + 2];
+        out.addVertex(m, ax, ay, az).setColor(r, g, b, 255).setUv(0, 1).setOverlay(OverlayTexture.NO_OVERLAY)
+                .setLight(light).setNormal(nx, ny, nz);
+        out.addVertex(m, bx, by, bz).setColor(r, g, b, 255).setUv(1, 1).setOverlay(OverlayTexture.NO_OVERLAY)
+                .setLight(light).setNormal(nx, ny, nz);
+        out.addVertex(m, cx, cy, cz).setColor(r, g, b, 255).setUv(1, 0).setOverlay(OverlayTexture.NO_OVERLAY)
+                .setLight(light).setNormal(nx, ny, nz);
+        out.addVertex(m, dx, dy, dz).setColor(r, g, b, 255).setUv(0, 0).setOverlay(OverlayTexture.NO_OVERLAY)
+                .setLight(light).setNormal(nx, ny, nz);
     }
 
     private static Vec3 point(Matrix4f matrix, Vec3 point) {

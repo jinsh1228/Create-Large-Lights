@@ -1,9 +1,10 @@
 {
   "parent": "minecraft:block/block",
   "textures": {
-    "particle": "create_media_systems:block/blu_ray_player_side",
-    "metal": "create_media_systems:block/blu_ray_player_side",
-    "lens": "minecraft:block/white_concrete"
+    "particle": "create_media_systems:block/lighting_console_frame",
+    "metal": "create_media_systems:block/lighting_console_frame",
+    "lens": "minecraft:block/white_concrete",
+    "casing": "create_media_systems:block/lighting_console_casing"
   },
   "elements": [
     {
@@ -19,22 +20,22 @@
       ],
       "faces": {
         "down": {
-          "texture": "#metal"
+          "texture": "#casing"
         },
         "up": {
-          "texture": "#metal"
+          "texture": "#casing"
         },
         "north": {
-          "texture": "#metal"
+          "texture": "#casing"
         },
         "south": {
-          "texture": "#metal"
+          "texture": "#casing"
         },
         "west": {
-          "texture": "#metal"
+          "texture": "#casing"
         },
         "east": {
-          "texture": "#metal"
+          "texture": "#casing"
         }
       }
     },
