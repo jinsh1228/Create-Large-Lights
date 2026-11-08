@@ -3,8 +3,11 @@ package io.github.jinsh1228.largelights;
 import java.util.function.Supplier;
 
 import org.haruyq.createmediasystems.CreateMediaSystems;
+import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
+import org.haruyq.createmediasystems.lighting.StageLightBlock;
 
 import net.minecraft.core.registries.Registries;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.BlockItem;
@@ -68,7 +71,12 @@ public class CreateLargeLights {
         BLOCK_ENTITIES.register(modBus);
         modBus.addListener(CreateLargeLights::registerPayloads);
         modBus.addListener(CreateLargeLights::addToTab);
-        NeoForge.EVENT_BUS.addListener(SceneFades::tick);
+        // Scenes fade and timers run with the console itself, loaded or not its floodlights.
+        LightingConsoleBlock.onTick(console -> {
+            ConsoleTimers.check(console, console.getLevel());
+            SceneFades.tick(console);
+        });
+        StageLightBlock.nameFamily(MOD_ID, Component.translatable("create_large_lights.family"));
     }
 
     public static ResourceLocation id(String path) {

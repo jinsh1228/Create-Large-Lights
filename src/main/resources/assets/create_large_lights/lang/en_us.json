@@ -58,5 +58,6 @@
   "create_large_lights.console.timers": "Timers (all)",
   "create_large_lights.console.timer": "Timer %s",
   "create_large_lights.console.timer_time": "Timer %s time (scroll: 15 min, sneak: 1 h)",
-  "create_large_lights.console.timer_scene": "Timer %s scene"
+  "create_large_lights.console.timer_scene": "Timer %s scene",
+  "create_large_lights.family": "floodlights"
 }

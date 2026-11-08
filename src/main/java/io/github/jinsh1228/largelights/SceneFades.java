@@ -1,6 +1,5 @@
 package io.github.jinsh1228.largelights;
 
-import java.util.Iterator;
 import java.util.Map;
 import java.util.WeakHashMap;
 
@@ -8,12 +7,11 @@ import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
 import org.haruyq.createmediasystems.lighting.LightingSettings;
 
 import net.minecraft.util.Mth;
-import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 /**
  * Scenes fading in on the server: each group's brightness and the master move from where they were to the scene's
- * over the console's fade time, eased in and out, as a hall's lights come up. Moving a fader by hand mid-fade
- * stops it there.
+ * over the console's fade time, eased in and out, as a hall's lights come up, a step each console tick. Moving a
+ * fader by hand mid-fade stops it there.
  */
 public final class SceneFades {
     private static final Map<LightingConsoleBlock.Entity, Fade> FADES = new WeakHashMap<>();
@@ -55,30 +53,30 @@ public final class SceneFades {
         return FADES.containsKey(console);
     }
 
-    static void tick(ServerTickEvent.Post event) {
-        for (Iterator<Map.Entry<LightingConsoleBlock.Entity, Fade>> it = FADES.entrySet().iterator(); it.hasNext(); ) {
-            Map.Entry<LightingConsoleBlock.Entity, Fade> entry = it.next();
-            LightingConsoleBlock.Entity console = entry.getKey();
-            Fade fade = entry.getValue();
-            if (console.isRemoved() || console.getLevel() == null || moved(console, fade.last)) {
-                it.remove();
-                continue;
-            }
-            long elapsed = console.getLevel().getGameTime() - fade.start;
-            float t = Mth.clamp(elapsed / (float) fade.ticks, 0, 1);
-            float eased = t * t * (3 - 2 * t);
-            float[] now = new float[fade.to.length];
-            for (int i = 0; i < now.length; i++) {
-                now[i] = Mth.lerp(eased, fade.from[i], fade.to[i]);
-            }
-            set(console, now);
-            fade.last = now;
-            if (t >= 1) {
-                it.remove();
-                console.changed();
-            } else if (elapsed % 2 == 0) {
-                console.changed();
-            }
+    /** A console's fade, a step: run as the console ticks (LightingConsoleBlock.onTick). */
+    static void tick(LightingConsoleBlock.Entity console) {
+        Fade fade = FADES.get(console);
+        if (fade == null) {
+            return;
+        }
+        if (console.isRemoved() || console.getLevel() == null || moved(console, fade.last)) {
+            FADES.remove(console);
+            return;
+        }
+        long elapsed = console.getLevel().getGameTime() - fade.start;
+        float t = Mth.clamp(elapsed / (float) fade.ticks, 0, 1);
+        float eased = t * t * (3 - 2 * t);
+        float[] now = new float[fade.to.length];
+        for (int i = 0; i < now.length; i++) {
+            now[i] = Mth.lerp(eased, fade.from[i], fade.to[i]);
+        }
+        set(console, now);
+        fade.last = now;
+        if (t >= 1) {
+            FADES.remove(console);
+            console.changed();
+        } else if (elapsed % 2 == 0) {
+            console.changed();
         }
     }
 

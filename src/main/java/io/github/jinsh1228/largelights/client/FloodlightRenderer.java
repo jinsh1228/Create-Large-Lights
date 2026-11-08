@@ -2,6 +2,7 @@ package io.github.jinsh1228.largelights.client;
 
 import org.haruyq.createmediasystems.CreateMediaSystems;
 import org.haruyq.createmediasystems.SableCompat;
+import org.haruyq.createmediasystems.lighting.LightingBeams;
 import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
 import org.haruyq.createmediasystems.lighting.LightingIllumination;
 import org.haruyq.createmediasystems.lighting.LightingRaycast;
@@ -203,8 +204,9 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
                 rays, model, effects, kind.radius);
         // The camera is at the frame's origin: the pose's translation is how far off the floodlight is.
         float distanceSqr = model.m30() * model.m30() + model.m31() * model.m31() + model.m32() * model.m32();
-        cone(effects.getBuffer(LightingRenderer.beamType()), model, trace, origin, right, up,
-                stadium ? 0.85f : 0.36f, stadium ? 0.55f : 0.36f, color, strength * kind.haze,
+        // On the GPU with CMS's stage beams where it can (LightingBeams), else as quads in the beam buffers.
+        cone(LightingBeams.available(level) ? null : effects.getBuffer(LightingRenderer.beamType()), model, trace, origin,
+                right, up, stadium ? 0.85f : 0.36f, stadium ? 0.55f : 0.36f, color, strength * kind.haze,
                 distanceSqr < NEAR * NEAR ? STEPS : STEPS / 2);
     }
 
@@ -308,7 +310,8 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
 
     /**
      * The beam in the air: from the lens's outline ({@code width} by {@code height} across) out along each edge,
-     * each strip as far as the nearer of its two edges reaches, fading as it goes, in {@code steps} along.
+     * each strip as far as the nearer of its two edges reaches, fading as it goes, in {@code steps} along. With
+     * {@code out} null, the strips go to CMS's GPU beams (LightingBeams), which fade and split them there.
      */
     private static void cone(VertexConsumer out, Matrix4f matrix, Trace trace, Vec3 origin, Vec3 right, Vec3 up,
                              float width, float height, int color, float alpha, int steps) {
@@ -317,6 +320,19 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         }
         int r = color >> 16 & 255, g = color >> 8 & 255, b = color & 255;
         double[] e = trace.edges;
+        if (out == null) {
+            for (int i = 0; i < EDGES; i++) {
+                int next = (i + 1) % EDGES;
+                double length = Math.min(trace.lengths[i], trace.lengths[next]);
+                Vec3 nearA = origin.add(right.scale(COS[i] * width)).add(up.scale(SIN[i] * height));
+                Vec3 nearB = origin.add(right.scale(COS[next] * width)).add(up.scale(SIN[next] * height));
+                Vec3 farA = nearA.add(e[i * 3] * length, e[i * 3 + 1] * length, e[i * 3 + 2] * length);
+                Vec3 farB = nearB.add(e[next * 3] * length, e[next * 3 + 1] * length, e[next * 3 + 2] * length);
+                LightingBeams.strip(matrix, nearA, nearB, farB, farA, color, color, LightingBeams.Fade.CONE,
+                        Math.min(alpha, 255), null, null, null);
+            }
+            return;
+        }
         for (int i = 0; i < EDGES; i++) {
             int next = (i + 1) % EDGES;
             double length = Math.min(trace.lengths[i], trace.lengths[next]);

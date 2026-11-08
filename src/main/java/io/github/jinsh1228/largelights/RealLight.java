@@ -154,9 +154,6 @@ public final class RealLight {
         // The quick look at its console; now and then CMS's full one, which follows a console that moved.
         boolean full = Math.floorMod(level.getGameTime() + pos.hashCode(), REFRESH) < CHECK;
         var owner = full ? light.controller() : light.quickController();
-        if (owner != null) {
-            ConsoleTimers.check(owner, level);
-        }
         FloodlightBlock.Entity.Beam beam = light.beam(owner);
         int brightness = FloodlightConfig.REAL_LIGHT.get() && !carried(level, pos)
                 ? Math.min(lightLevel(beam.strength()), beam.lightLimit()) : 0;

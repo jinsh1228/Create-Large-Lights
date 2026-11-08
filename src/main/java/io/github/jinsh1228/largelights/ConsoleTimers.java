@@ -9,9 +9,9 @@ import net.minecraft.world.level.Level;
 
 /**
  * The floodlight page's timers, on the server: when the day's time passes a timer's, its scene is recalled (with
- * the console's fade). Looked at by the console's floodlights as they tick (RealLight), once a tick at most for a
- * console, so a console's timers run while any floodlight of it is loaded. Time jumping ahead (sleep, /time add)
- * recalls the last timer passed; time set back recalls nothing.
+ * the console's fade). Looked at each tick as the console ticks (LightingConsoleBlock.onTick), so they run while
+ * the console is loaded. Time jumping ahead (sleep, /time add) recalls the last timer passed; time set back
+ * recalls nothing.
  */
 public final class ConsoleTimers {
     private static final Map<LightingConsoleBlock.Entity, State> STATES = new WeakHashMap<>();

@@ -58,5 +58,6 @@
   "create_large_lights.console.timers": "タイマー（全体）",
   "create_large_lights.console.timer": "タイマー %s",
   "create_large_lights.console.timer_time": "タイマー %s の時刻（スクロールで15分、スニークで1時間）",
-  "create_large_lights.console.timer_scene": "タイマー %s のシーン"
+  "create_large_lights.console.timer_scene": "タイマー %s のシーン",
+  "create_large_lights.family": "CLLの投光器"
 }
