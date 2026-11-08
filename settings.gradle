@@ -10,6 +10,13 @@ plugins {
 
 rootProject.name = 'CreateLargeLights'
 
-// Create: Media Systems is built from its source next to this one (-PcmsPath=... for elsewhere), so the fixture
-// API it adds is there while it is unreleased. It stands in for org.haruyq:CreateMediaSystems below.
-includeBuild(providers.gradleProperty('cmsPath').getOrElse('../Create-Media-Systems'))
+// Create: Media Systems comes as its released jar (build.gradle). To build against its source instead (a change
+// to CMS not yet released), give its folder: -PcmsPath=../Create-Media-Systems
+def cmsPath = providers.gradleProperty('cmsPath')
+if (cmsPath.isPresent()) {
+    includeBuild(cmsPath.get()) {
+        dependencySubstitution {
+            substitute module('org.haruyq:create_media_systems') using project(':')
+        }
+    }
+}

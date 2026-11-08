@@ -14,6 +14,20 @@ base {
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
 repositories {
+    // Create: Media Systems' releases on GitHub, each with its jar.
+    ivy {
+        name = 'Create: Media Systems releases'
+        url = 'https://github.com/haruyq/Create-Media-Systems/releases/download/'
+        patternLayout {
+            artifact 'v[revision]/[module]-[revision].[ext]'
+        }
+        metadataSources {
+            artifact()
+        }
+        content {
+            includeModule('org.haruyq', 'create_media_systems')
+        }
+    }
     maven { url = 'https://maven.createmod.net' }
     maven { url = 'https://maven.ithundxr.dev/snapshots' }
     maven {
@@ -70,8 +84,8 @@ configurations {
 }
 
 dependencies {
-    // Create: Media Systems, from the build included in settings.gradle.
-    implementation('org.haruyq:CreateMediaSystems')
+    // Create: Media Systems: its release, or its source with -PcmsPath (settings.gradle).
+    implementation("org.haruyq:create_media_systems:${cms_version}")
 
     implementation("com.simibubi.create:create-${minecraft_version}:${create_version}:slim") {
         transitive = false

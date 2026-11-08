@@ -117,11 +117,16 @@ CMSのLED調整用スパナで制御卓にリンクすると、レッドスト�
 
 ## ビルド
 
-CMSのソース（1.2.0以降）をこのフォルダの隣（`../Create-Media-Systems`）に置き、composite buildとして一緒にビルドします。
-別の場所にある場合は `-PcmsPath=<パス>` を付けてください。
+CMSはGitHubのリリースにあるjar（`gradle.properties` の `cms_version`）を自動で取得して使います。
 
 ```bash
 ./gradlew build
+```
+
+まだリリースされていないCMSの変更に対してビルドするときは、CMSのソースの場所を指定します。
+
+```bash
+./gradlew build -PcmsPath=../Create-Media-Systems
 ```
 
 デモ（体育館を自動で作り、実際の明るさ・レンチ・制御卓での制御を確かめてログに `CHECK PASS/FAIL` を出し、撮影して終了します。スクリーンショットは `run-demo/screenshots/`）:
