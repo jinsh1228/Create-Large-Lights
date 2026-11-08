@@ -1,5 +1,9 @@
 package io.github.jinsh1228.largelights.client;
 
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+
 import org.haruyq.createmediasystems.CreateMediaSystems;
 import org.haruyq.createmediasystems.SableCompat;
 import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
@@ -7,7 +11,6 @@ import org.haruyq.createmediasystems.lighting.LightingIllumination;
 import org.haruyq.createmediasystems.lighting.LightingRaycast;
 import org.haruyq.createmediasystems.lighting.LightingRenderer;
 import org.haruyq.createmediasystems.lighting.LightingSettings;
-import org.haruyq.createmediasystems.playback.AnalysisPlayback;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
@@ -38,6 +41,7 @@ import net.minecraft.world.phys.Vec3;
  * lenses and the air beam stopped where each edge meets a block.
  */
 public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightBlock.Entity> {
+    private static final MethodHandle ANALYSIS_SECONDS = analysisClock();
     private static final int EDGES = 16;
     private static final int STEPS = 8;
     /** The lighting console's brushed frame and riveted casing, as CMS's stage lights wear them. */
@@ -138,7 +142,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         LightingConsoleBlock.Entity console = beam.console();
         double seconds = (level.getGameTime() + (double) partialTick) / 20;
         if (console != null) {
-            seconds = AnalysisPlayback.apply(console, seconds);
+            seconds = analysisSeconds(console, seconds);
         }
         float[] aim = aim(lamp, beam, seconds, partialTick);
         Matrix4f local = Aim.head(aim[0], aim[1]);
@@ -210,6 +214,32 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         cone(effects.getBuffer(LightingRenderer.beamType()), model, trace, origin, right, up,
                 stadium ? 0.85f : 0.36f, stadium ? 0.55f : 0.36f, color, strength * kind.haze,
                 distanceSqr < NEAR * NEAR ? STEPS : STEPS / 2);
+    }
+
+    /** CMS moved this clock in the source refactor; released jars retain the original package. */
+    private static MethodHandle analysisClock() {
+        ReflectiveOperationException missing = null;
+        for (String namespace : new String[]{"lighting", "playback"}) {
+            try {
+                Class<?> type = Class.forName("org.haruyq.createmediasystems." + namespace + ".AnalysisPlayback",
+                        false, FloodlightRenderer.class.getClassLoader());
+                return MethodHandles.publicLookup().findStatic(type, "apply",
+                        MethodType.methodType(double.class, LightingConsoleBlock.Entity.class, double.class));
+            } catch (ReflectiveOperationException error) {
+                missing = error;
+            }
+        }
+        throw new IllegalStateException("CMS AnalysisPlayback.apply is missing from both supported packages", missing);
+    }
+
+    private static double analysisSeconds(LightingConsoleBlock.Entity console, double fallback) {
+        try {
+            return (double) ANALYSIS_SECONDS.invokeExact(console, fallback);
+        } catch (RuntimeException | Error error) {
+            throw error;
+        } catch (Throwable error) {
+            throw new IllegalStateException("CMS media analysis clock failed", error);
+        }
     }
 
     /**
@@ -435,6 +465,8 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
 
     @Override
     public AABB getRenderBoundingBox(FloodlightBlock.Entity lamp) {
-        return lamp.getRenderBoundingBox();
+        AABB bounds = new AABB(lamp.getBlockPos()).inflate(LightingSettings.MAX_RANGE + 1);
+        Level level = lamp.getLevel();
+        return level == null ? bounds : SableCompat.toWorld(level, bounds);
     }
 }

@@ -97,6 +97,7 @@ if (providers.gradleProperty('shapeDemo').isPresent() || providers.gradlePropert
 
 // Isolated CPU/GPU visibility comparison; this does not enable the prototype in a release build.
 def gpuDemo = providers.gradleProperty('gpuDemo').isPresent()
+def cmsOnlyDemo = gpuDemo && providers.gradleProperty('gpuMode').getOrElse('gpu') == 'cms'
 if (gpuDemo) {
     sourceSets.main.java.srcDirs('src/shapeDemo/java', 'src/gpuDemo/java')
     sourceSets.main.resources.srcDir('src/gpuDemo/resources')
@@ -109,6 +110,20 @@ if (gpuDemo) {
         systemProperty 'createLargeLights.gpuDemo.lightCount', providers.gradleProperty('gpuLights').getOrElse('1')
         systemProperty 'createLargeLights.gpuDemo.angle', providers.gradleProperty('gpuAngle').getOrElse('oblique')
         programArguments.addAll('--width', '1280', '--height', '720')
+    }
+}
+
+// The CMS comparison uses its native model/raycast path. Always restore the original config on mode changes.
+tasks.named('processResources', ProcessResources) {
+    inputs.property 'cmsOnlyDemo', cmsOnlyDemo
+    doLast {
+        def source = file('src/main/resources/create_large_lights.mixins.json').getText('UTF-8')
+        if (cmsOnlyDemo) {
+            def config = new groovy.json.JsonSlurper().parseText(source)
+            config.client.removeAll(['LightingRaycastMixin', 'LightingSurfaceScanMixin', 'LightModelDataMixin'])
+            source = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(config))
+        }
+        new File(destinationDir, 'create_large_lights.mixins.json').write(source, 'UTF-8')
     }
 }
 

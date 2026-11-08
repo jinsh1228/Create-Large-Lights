@@ -134,17 +134,20 @@ GPU機能が使えない環境、Irisのシェーダーパック使用中、光�
 
 ## ビルド
 
-CMSはGitHubのリリースにあるjar（`gradle.properties` の `cms_version`）を自動で取得して使います。
+CMSは既定で公式リリース1.2.1のjar（`gradle.properties` の `cms_version`）を自動で取得して使います。対応範囲は1.2.0以降です。
 
 ```bash
 ./gradlew build
 ```
 
-まだリリースされていないCMSの変更に対してビルドするときは、CMSのソースの場所を指定します。
+CMSの[606122bf](https://github.com/haruyq/Create-Media-Systems/commit/606122bfcd2b339d056eaa246eda6ffb779543af)は公開1.2.1（tag `v1.2.1`、commit `c09f40e`）より後のソースです。
+同じ1.2.1表記でも、その後の描画修正・リファクタリングは公開jarには含まれません。ソース版を使う場合は、その場所を指定します。
 
 ```bash
 ./gradlew build -PcmsPath=../Create-Media-Systems
 ```
+
+CLL独自のGPU描画と実照度は引き続き使用します。CMSの表面描画へ戻る場面では、使用するCMS版の描画上の制約も受けます。
 
 デモ（体育館を自動で作り、実際の明るさ・レンチ・制御卓での制御を確かめてログに `CHECK PASS/FAIL` を出し、撮影して終了します。スクリーンショットは `run-demo/screenshots/`）:
 
@@ -168,11 +171,14 @@ CPU描画と本番GPU描画の比較用シーン（デモ用コードは通常�
 ```bash
 ./gradlew -PgpuDemo -PgpuMode=cpu -PgpuAngle=oblique -PgpuLights=16 runClient
 ./gradlew -PgpuDemo -PgpuMode=production -PgpuAngle=oblique -PgpuLights=16 runClient
+./gradlew -PgpuDemo -PgpuMode=cms -PgpuAngle=oblique -PgpuLights=16 runClient
 ```
 
 `gpuAngle=vertical` で真上からの照射、`gpuLights=1` で単灯を比較できます。
 全灯の位置・色・明るさ・照射角・射程の一致を検証し、実光量をOFFにして表面投影だけを測定します。
 `gpuMode=gpu` は比較用の旧GPU試作です。この試作だけは `-PshadowSize=1024` などで影の解像度を変更できます。
+`gpuMode=cms` は比較用にCLLのraycast・surface model・ModelData通知の3Mixinを除外し、CMS本来の表面描画を使います。
+`-PcmsPath=../Create-Media-Systems` を併用して、ソース版と公開版を比較できます。
 
 本番GPU経路のフェード・色・遮蔽物・向きの更新、資源の再読込と解放を検証するデモ:
 
