@@ -35,4 +35,22 @@ class FloodlightRendererTest {
             assertEquals(kind.intensity * 0.4f, FloodlightRenderer.overlay(kind, true, 15));
         }
     }
+
+    @Test
+    void anEasedAimConvergesToZeroAndThenStaysExactlyStillAtDifferentFrameRates() {
+        for (int fps : new int[]{30, 60, 144}) {
+            AimMotion motion = new AimMotion();
+            motion.update(0, 12, 4, false);
+            float[] first = motion.update(1.0 / fps, 0, 0, false);
+            assertTrue(first[0] > 0 && first[0] < 12);
+            assertTrue(first[1] > 0 && first[1] < 4);
+            for (int frame = 2; frame <= fps * 4; frame++) {
+                float[] aim = motion.update(frame / (double) fps, 0, 0, false);
+                if (frame >= fps * 3) {
+                    assertEquals(0f, aim[0]);
+                    assertEquals(0f, aim[1]);
+                }
+            }
+        }
+    }
 }

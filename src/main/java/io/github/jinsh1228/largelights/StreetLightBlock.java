@@ -164,13 +164,35 @@ public class StreetLightBlock extends HorizontalDirectionalBlock implements Enti
             super(CreateLargeLights.STREET_LIGHT_ENTITY.get(), pos, state);
         }
 
+        @Override
+        public void onLoad() {
+            super.onLoad();
+            if (level != null && !level.isClientSide) {
+                refresh();
+            }
+        }
+
+        @Override
+        public void setRemoved() {
+            if (level != null) {
+                LightField.remove(level, worldPosition);
+            }
+            super.setRemoved();
+        }
+
         public int lightCount() {
             return placed.size();
         }
 
-        /** Every RealLight.CHECK ticks: its sensor, then its light blocks if anything changed. */
+        /** Every RealLight.CHECK ticks: its sensor, then its illumination if anything changed. */
         void tick() {
-            if (level == null || !RealLight.due(level, worldPosition)) {
+            if (level != null && RealLight.due(level, worldPosition)) {
+                refresh();
+            }
+        }
+
+        private void refresh() {
+            if (level == null || level.isClientSide) {
                 return;
             }
             BlockState state = getBlockState();
@@ -179,15 +201,13 @@ public class StreetLightBlock extends HorizontalDirectionalBlock implements Enti
                 state = state.setValue(LIT, lit);
                 level.setBlock(worldPosition, state, Block.UPDATE_CLIENTS);
             }
-            int brightness = lit && FloodlightConfig.REAL_LIGHT.get() && !RealLight.carried(level, worldPosition) ? 15 : 0;
+            float strength = lit && FloodlightConfig.REAL_LIGHT.get() && !RealLight.carried(level, worldPosition) ? 1 : 0;
             Direction facing = state.getValue(FACING);
-            int signature = RealLight.signature(brightness, facing.get2DDataValue(), 0, SPREAD, RANGE);
+            int signature = RealLight.signature(strength, 15, facing.get2DDataValue(), 0, SPREAD, RANGE);
             if (RealLight.update(level, worldPosition, placed, signature, () -> {
-                // Straight down from the lamp: its right across the arm, its up along it.
                 Vec3 down = new Vec3(0, -1, 0);
-                Vec3 along = new Vec3(facing.getStepX(), 0, facing.getStepZ());
-                return new RealLight.Cast(lamp(worldPosition, facing).add(down.scale(0.5)), down, along.cross(down),
-                        along, Math.tan(Math.toRadians(SPREAD) / 2), RANGE, RADIUS, brightness);
+                return new LightField.Beam(lamp(worldPosition, facing).add(down.scale(0.5)), down,
+                        Math.tan(Math.toRadians(SPREAD) / 2), RANGE, strength, 15, RADIUS);
             })) {
                 setChanged();
             }
@@ -196,7 +216,9 @@ public class StreetLightBlock extends HorizontalDirectionalBlock implements Enti
         @Override
         protected void saveAdditional(CompoundTag tag, HolderLookup.Provider registries) {
             super.saveAdditional(tag, registries);
-            tag.putLongArray("LightBlocks", placed.toArray());
+            if (placed.size() > 0) {
+                tag.putLongArray("LightBlocks", placed.toArray());
+            }
         }
 
         @Override

@@ -17,8 +17,11 @@ final class AimMotion {
             pitch = desiredPitch;
         } else if (!hold) {
             double weight = 1 - Math.exp(-Math.min(seconds - time, 0.5) * 9);
-            yaw += Mth.wrapDegrees(desiredYaw - yaw) * (float) weight;
-            pitch += (desiredPitch - pitch) * (float) weight;
+            float yawError = Mth.wrapDegrees(desiredYaw - yaw);
+            float pitchError = desiredPitch - pitch;
+            // Subpixel motion near zero otherwise keeps invalidating shadow maps until float underflow.
+            yaw = Math.abs(yawError) <= 1e-4f ? desiredYaw : yaw + yawError * (float) weight;
+            pitch = Math.abs(pitchError) <= 1e-4f ? desiredPitch : pitch + pitchError * (float) weight;
         }
         time = seconds;
         return new float[]{Mth.wrapDegrees(yaw), pitch};

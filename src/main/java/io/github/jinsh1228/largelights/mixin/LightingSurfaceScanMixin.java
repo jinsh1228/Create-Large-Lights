@@ -9,6 +9,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
 
 import io.github.jinsh1228.largelights.FloodlightBlock;
+import io.github.jinsh1228.largelights.client.LightModelSnapshots;
 import io.github.jinsh1228.largelights.client.LightSurfaceGeometry;
 
 import net.minecraft.client.renderer.RenderType;
@@ -32,8 +33,10 @@ abstract class LightingSurfaceScanMixin {
     private List<BakedQuad> createLargeLights$patches(BakedModel model, BlockState state, Direction side,
                                                     RandomSource random, ModelData data, RenderType type,
                                                     BlockPos pos) {
-        List<BakedQuad> quads = model.getQuads(state, side, random, data, type);
-        return level.getBlockState(lamp).getBlock() instanceof FloodlightBlock && !state.isSolidRender(level, pos)
-                ? LightSurfaceGeometry.subdivide(quads) : quads;
+        if (!(level.getBlockState(lamp).getBlock() instanceof FloodlightBlock)) {
+            return model.getQuads(state, side, random, data, type);
+        }
+        List<BakedQuad> quads = LightModelSnapshots.quads(level, pos, state, side);
+        return !state.isSolidRender(level, pos) ? LightSurfaceGeometry.subdivide(quads) : quads;
     }
 }

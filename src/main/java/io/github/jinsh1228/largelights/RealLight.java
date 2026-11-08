@@ -2,62 +2,41 @@ package io.github.jinsh1228.largelights;
 
 import java.util.function.LongConsumer;
 import java.util.function.LongPredicate;
-import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import org.haruyq.createmediasystems.SableCompat;
-
-import it.unimi.dsi.fastutil.doubles.DoubleArrayList;
-import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
-
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
-import net.minecraft.world.level.BlockGetter;
-import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.LightBlock;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
-import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.level.saveddata.SavedData;
-import net.minecraft.world.phys.BlockHitResult;
-import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
-import net.minecraft.world.phys.shapes.CollisionContext;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.event.level.ChunkEvent;
+import net.neoforged.neoforge.event.level.LevelEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
 
-/**
- * The light a floodlight casts into the world itself: invisible light blocks (minecraft:light) in the air just off
- * the faces its beam falls on, a few blocks apart, as bright as the beam. Each floodlight keeps the ones it placed
- * (Entity.lights) and takes them away when its beam moves off them, goes out, or the floodlight is broken. It never
- * replaces anything but air or still water, and never takes away a light block it didn't place.
- */
+/** Registers illumination data and migrates the invisible light blocks left by earlier versions. */
 @EventBusSubscriber(modid = CreateLargeLights.MOD_ID)
 public final class RealLight {
-    /** Ticks between looks at whether the beam changed (spread over lights by position). */
     static final int CHECK = 10;
-    /** Ticks after which the faces are traced again even with the beam unchanged: blocks may have moved. */
     static final int REFRESH = 200;
-    /** The most beam samples across, either way. */
-    static final int MAX_GRID = 41;
-    /** Each grid's disk samples (u, v pairs), made once. */
-    private static final double[][] DISKS = new double[MAX_GRID + 1][];
 
     private RealLight() {
     }
 
-    /** The light blocks one light placed, and what it last placed them for. */
+    /** Legacy ownership is retained only until its old light blocks have been removed safely. */
     public static final class Placed {
         final LongSet lights = new LongOpenHashSet();
         int signature;
@@ -84,297 +63,75 @@ public final class RealLight {
         }
     }
 
-    /**
-     * A beam as it lights the world: from {@code from} (outside the light's own block) along {@code forward},
-     * {@code tangent} wide, {@code range} long, laid over at most {@code radius} blocks either way across the surface
-     * it falls on, at light level {@code brightness}.
-     */
-    record Cast(Vec3 from, Vec3 forward, Vec3 right, Vec3 up, double tangent, double range, int radius, int brightness) {
-        /** Aimed by yaw and pitch (Aim), from near the lens at {@code pos}. The trace ignores the fixture itself. */
-        static Cast aimed(BlockPos pos, float yaw, float pitch, float spread, double range, FloodlightKind kind, int brightness) {
-            var head = Aim.head(yaw, pitch);
-            org.joml.Vector3f f = head.transformDirection(new org.joml.Vector3f(0, 0, 1)).normalize();
-            org.joml.Vector3f r = head.transformDirection(new org.joml.Vector3f(1, 0, 0)).normalize();
-            org.joml.Vector3f u = head.transformDirection(new org.joml.Vector3f(0, 1, 0)).normalize();
-            Vec3 forward = new Vec3(f.x, f.y, f.z);
-            return new Cast(Vec3.atCenterOf(pos).add(forward.scale(kind.lensZ + 0.01)), forward,
-                    new Vec3(r.x, r.y, r.z), new Vec3(u.x, u.y, u.z),
-                    Math.tan(Math.toRadians(spread) / 2), range, kind.radius, brightness);
-        }
-
-        /** A light source's centre must be inside the same cone and range as the surface shader. */
-        boolean contains(BlockPos pos) {
-            double x = pos.getX() + 0.5 - from.x, y = pos.getY() + 0.5 - from.y, z = pos.getZ() + 0.5 - from.z;
-            double along = x * forward.x + y * forward.y + z * forward.z;
-            double radius = Math.max(0.08, along * tangent);
-            return along > 0 && along < range && x * x + y * y + z * z - along * along < radius * radius;
-        }
-    }
-
-    /** The light level of a beam at {@code strength} (0 to 1): off at 0, else at least 1. */
     public static int lightLevel(float strength) {
-        return strength <= 0.001f ? 0 : Mth.clamp(Math.round(strength * 15), 1, 15);
+        return strength <= .001f ? 0 : Mth.clamp(Math.round(strength * 15), 1, 15);
     }
 
-    /** Beam samples across, so that where it falls they're about {@code spacing} apart over {@code radius}. */
-    static int grid(double radius, int spacing) {
-        return Mth.clamp(Mth.ceil(2 * radius / spacing) + 1, 1, MAX_GRID);
+    static boolean due(Level level, BlockPos pos) {
+        return Math.floorMod(level.getGameTime() + pos.hashCode(), CHECK) == 0;
     }
 
-    /** The {@code grid}×{@code grid} samples of the unit disk, as (u, v) pairs, the middle first. Shared: not to change. */
-    static double[] disk(int grid) {
-        grid = Mth.clamp(grid, 1, MAX_GRID);
-        double[] disk = DISKS[grid];
-        if (disk != null) {
-            return disk;
-        }
-        DoubleArrayList samples = new DoubleArrayList();
-        samples.add(0);
-        samples.add(0);
-        for (int i = 0; grid > 1 && i < grid; i++) {
-            for (int j = 0; j < grid; j++) {
-                double u = -1 + 2.0 * i / (grid - 1);
-                double v = -1 + 2.0 * j / (grid - 1);
-                if (u * u + v * v <= 1.0001 && (Math.abs(u) > 1e-9 || Math.abs(v) > 1e-9)) {
-                    samples.add(u);
-                    samples.add(v);
-                }
+    static boolean update(Level level, BlockPos pos, Placed placed, int signature, Supplier<LightField.Beam> beam) {
+        boolean migrated = !placed.lights.isEmpty();
+        if (migrated) {
+            if (level.isClientSide) {
+                placed.lights.clear();
+            } else {
+                clear(level, placed);
             }
         }
-        disk = samples.toDoubleArray();
-        DISKS[grid] = disk;
-        return disk;
-    }
-
-    /** Whether it is this light's turn to look (every CHECK ticks, spread over lights by position). */
-    static boolean due(Level level, BlockPos pos) {
-        return !level.isClientSide && Math.floorMod(level.getGameTime() + pos.hashCode(), CHECK) == 0;
-    }
-
-    /**
-     * Places {@code placed}'s light blocks for {@code cast} (or takes them all away, at brightness 0), if its
-     * {@code signature} changed or REFRESH ticks have passed; true if any changed. The cast is only made then.
-     */
-    static boolean update(Level level, BlockPos pos, Placed placed, int signature, java.util.function.Supplier<Cast> cast) {
         long now = level.getGameTime();
-        if (!placed.needsUpdate(signature, now)) {
-            return false;
+        if (placed.needsUpdate(signature, now)) {
+            placed.signature = signature;
+            placed.updated = now;
+            LightField.update(level, pos, beam.get());
         }
-        placed.signature = signature;
-        placed.updated = now;
-        Cast beam = cast.get();
-        int spacing = FloodlightConfig.SPACING.get();
-        Long2LongOpenHashMap wanted = beam.brightness() == 0 ? new Long2LongOpenHashMap()
-                : footprint(level, pos, placed, beam, spacing, FloodlightConfig.MAX_LIGHTS.get());
-        return apply(level, placed.lights, wanted, beam.brightness());
+        return migrated && !level.isClientSide;
     }
 
-    /** Whether the block at {@code pos} rides a moving Sable structure: its light blocks would trail behind it. */
     static boolean carried(Level level, BlockPos pos) {
         Vec3 center = Vec3.atCenterOf(pos);
         return !SableCompat.toWorld(level, pos, center).equals(center);
     }
 
     static void tick(Level level, BlockPos pos, FloodlightBlock.Entity light) {
-        if (!due(level, pos)) {
-            return;
+        if (due(level, pos)) {
+            refresh(level, pos, light);
         }
-        // The quick look at its console; now and then CMS's full one, which follows a console that moved.
-        boolean full = Math.floorMod(level.getGameTime() + pos.hashCode(), REFRESH) < CHECK;
+    }
+
+    static void refresh(Level level, BlockPos pos, FloodlightBlock.Entity light) {
+        boolean full = light.placed.updated == Long.MIN_VALUE
+                || Math.floorMod(level.getGameTime() + pos.hashCode(), REFRESH) < CHECK;
         var owner = full ? light.controller() : light.quickController();
-        if (owner != null) {
+        if (owner != null && !level.isClientSide) {
             ConsoleTimers.check(owner, level);
         }
         FloodlightBlock.Entity.Beam beam = light.beam(owner);
-        int brightness = FloodlightConfig.REAL_LIGHT.get() && !carried(level, pos)
-                ? Math.min(lightLevel(beam.strength()), beam.lightLimit()) : 0;
-        // The aim with the console's pan and tilt; a group's motion moves the beam, not the light blocks.
-        int signature = signature(brightness, beam.yaw(), beam.pitch(), beam.spread(), beam.range());
-        if (update(level, pos, light.placed, signature, () -> Cast.aimed(pos, beam.yaw(), beam.pitch(), beam.spread(),
-                beam.range(), light.kind(), brightness))) {
+        float strength = FloodlightConfig.REAL_LIGHT.get() && !carried(level, pos) ? beam.strength() : 0;
+        int signature = signature(strength, beam.lightLimit(), beam.yaw(), beam.pitch(), beam.spread(), beam.range());
+        if (update(level, pos, light.placed, signature, () -> aimed(pos, beam.yaw(), beam.pitch(), beam.spread(),
+                beam.range(), light.kind(), strength, beam.lightLimit()))) {
             light.changed();
         }
     }
 
-    /** What a cast depends on, and the config: when it changes, the light blocks are placed again. */
-    static int signature(int brightness, float yaw, float pitch, float spread, float range) {
-        int hash = brightness;
+    static LightField.Beam aimed(BlockPos pos, float yaw, float pitch, float spread, double range,
+                                 FloodlightKind kind, float strength, int limit) {
+        Vec3 forward = Aim.direction(yaw, pitch);
+        return new LightField.Beam(Vec3.atCenterOf(pos).add(forward.scale(kind.lensZ + .01)), forward,
+                Math.tan(Math.toRadians(spread) / 2), range, strength, limit, kind.radius);
+    }
+
+    static int signature(float strength, int limit, float yaw, float pitch, float spread, float range) {
+        int hash = Float.floatToIntBits(strength);
+        hash = 31 * hash + limit;
         hash = 31 * hash + Float.floatToIntBits(yaw);
         hash = 31 * hash + Float.floatToIntBits(pitch);
         hash = 31 * hash + Float.floatToIntBits(spread);
-        hash = 31 * hash + Float.floatToIntBits(range);
-        hash = 31 * hash + FloodlightConfig.SPACING.get();
-        return 31 * hash + FloodlightConfig.MAX_LIGHTS.get();
+        return 31 * hash + Float.floatToIntBits(range);
     }
 
-    /** Where the beam wants light blocks: air just off the faces it falls on, one in each spacing-sized cell. */
-    private static Long2LongOpenHashMap footprint(Level level, BlockPos pos, Placed placed, Cast cast, int spacing,
-                                                  int max) {
-        Vec3 from = cast.from();
-        Vec3 forward = cast.forward();
-        double tangent = cast.tangent();
-        double range = cast.range();
-        BlockGetter blocks = new TraceBlocks(level, level::isLoaded, pos);
-        BlockHitResult middle = clip(blocks, from, from.add(forward.scale(range)));
-        double distance = middle.getType() == HitResult.Type.BLOCK ? middle.getLocation().distanceTo(from) : range;
-        double radius = Math.min(distance * tangent, cast.radius());
-        double sampledTangent = middle.getType() == HitResult.Type.BLOCK
-                ? sampleTangent(tangent, distance, cast.radius()) : tangent;
-        // cell → position: keep the sample nearest the cell's middle, with ties toward the beam's middle.
-        Long2LongOpenHashMap wanted = new Long2LongOpenHashMap();
-        double[] disk = disk(grid(radius, spacing));
-        for (int i = 0; i < disk.length; i += 2) {
-            BlockHitResult hit;
-            if (i == 0) {
-                hit = middle;
-            } else {
-                double u = disk[i] * sampledTangent;
-                double v = disk[i + 1] * sampledTangent;
-                double x = forward.x + cast.right().x * u + cast.up().x * v;
-                double y = forward.y + cast.right().y * u + cast.up().y * v;
-                double z = forward.z + cast.right().z * u + cast.up().z * v;
-                double scale = range / Math.sqrt(x * x + y * y + z * z);
-                hit = clip(blocks, from, from.add(x * scale, y * scale, z * scale));
-            }
-            if (hit.getType() != HitResult.Type.BLOCK
-                    || middle.getType() == HitResult.Type.BLOCK
-                    && hit.getLocation().distanceToSqr(middle.getLocation()) > (double) cast.radius() * cast.radius()) {
-                continue;
-            }
-            BlockPos at = hit.getBlockPos().relative(hit.getDirection());
-            if (at.equals(pos) || !cast.contains(at) || !level.isLoaded(at)) {
-                continue;
-            }
-            if (placeable(level.getBlockState(at), placed.lights.contains(at.asLong()))) {
-                sample(wanted, at, spacing, middle.getLocation(), max);
-            }
-        }
-        return wanted;
-    }
-
-    /** A disk edge must not claim a cell's far corner and discard its later samples nearer the middle. */
-    static void sample(Long2LongOpenHashMap wanted, BlockPos at, int spacing, Vec3 center, int max) {
-        long cell = BlockPos.asLong(Math.floorDiv(at.getX(), spacing), Math.floorDiv(at.getY(), spacing),
-                Math.floorDiv(at.getZ(), spacing));
-        if (!wanted.containsKey(cell)) {
-            if (wanted.size() < max) {
-                wanted.put(cell, at.asLong());
-            }
-            return;
-        }
-        BlockPos previous = BlockPos.of(wanted.get(cell));
-        double distance = cellDistance(at, spacing);
-        double before = cellDistance(previous, spacing);
-        if (distance < before || distance == before && at.distToCenterSqr(center) < previous.distToCenterSqr(center)) {
-            wanted.put(cell, at.asLong());
-        }
-    }
-
-    private static double cellDistance(BlockPos at, int spacing) {
-        double middle = (spacing - 1) * 0.5;
-        double x = Math.floorMod(at.getX(), spacing) - middle;
-        double y = Math.floorMod(at.getY(), spacing) - middle;
-        double z = Math.floorMod(at.getZ(), spacing) - middle;
-        return x * x + y * y + z * z;
-    }
-
-    /** The sampling cone fits the footprint's radius, even when a distant surface makes the full beam wider. */
-    static double sampleTangent(double tangent, double distance, int radius) {
-        return distance > 0 ? Math.min(tangent, radius / distance) : tangent;
-    }
-
-    /** A trace must not load distant chunks, or collide with the fixture's approximate block shape. */
-    record TraceBlocks(BlockGetter blocks, Predicate<BlockPos> loaded, BlockPos fixture) implements BlockGetter {
-        @Override
-        public BlockState getBlockState(BlockPos pos) {
-            if (pos.equals(fixture)) {
-                return Blocks.AIR.defaultBlockState();
-            }
-            // Stop at unknown terrain instead of letting the ray pass through it into another loaded chunk.
-            return loaded.test(pos) ? blocks.getBlockState(pos) : Blocks.BARRIER.defaultBlockState();
-        }
-
-        @Override
-        public BlockHitResult clip(ClipContext context) {
-            BlockHitResult hit = BlockGetter.super.clip(context);
-            return loaded.test(hit.getBlockPos()) ? hit
-                    : BlockHitResult.miss(hit.getLocation(), hit.getDirection(), hit.getBlockPos());
-        }
-
-        @Override
-        public FluidState getFluidState(BlockPos pos) {
-            return getBlockState(pos).getFluidState();
-        }
-
-        @Override
-        public BlockEntity getBlockEntity(BlockPos pos) {
-            return pos.equals(fixture) || !loaded.test(pos) ? null : blocks.getBlockEntity(pos);
-        }
-
-        @Override
-        public int getHeight() {
-            return blocks.getHeight();
-        }
-
-        @Override
-        public int getMinBuildHeight() {
-            return blocks.getMinBuildHeight();
-        }
-    }
-
-    private static BlockHitResult clip(BlockGetter blocks, Vec3 from, Vec3 to) {
-        return blocks.clip(new ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE,
-                CollisionContext.empty()));
-    }
-
-    /** Air, still water, or a light block this floodlight placed. */
-    static boolean placeable(BlockState state, boolean ours) {
-        return state.isAir() || state.is(Blocks.LIGHT) && ours
-                || state.is(Blocks.WATER) && state.getFluidState().isSource();
-    }
-
-    /**
-     * Places the {@code wanted} light blocks at {@code brightness} and takes away those placed before that aren't
-     * wanted (unless their chunk is unloaded: they're taken later). {@code placed} is kept up to date.
-     */
-    static boolean apply(Level level, LongSet placed, Long2LongOpenHashMap wanted, int brightness) {
-        LongSet keep = new LongOpenHashSet(wanted.values());
-        boolean changed = false;
-        for (LongIterator it = placed.iterator(); it.hasNext(); ) {
-            long packed = it.nextLong();
-            if (keep.contains(packed)) {
-                continue;
-            }
-            BlockPos at = BlockPos.of(packed);
-            if (!level.isLoaded(at)) {
-                continue;
-            }
-            remove(level, at);
-            it.remove();
-            changed = true;
-        }
-        for (long packed : keep) {
-            BlockPos at = BlockPos.of(packed);
-            BlockState state = level.getBlockState(at);
-            boolean ours = placed.contains(packed);
-            if (!placeable(state, ours)) {
-                // Built over since: no longer ours to look after.
-                changed |= placed.remove(packed);
-                continue;
-            }
-            boolean water = state.is(Blocks.LIGHT) ? state.getValue(BlockStateProperties.WATERLOGGED)
-                    : state.is(Blocks.WATER);
-            BlockState lit = Blocks.LIGHT.defaultBlockState().setValue(LightBlock.LEVEL, brightness)
-                    .setValue(BlockStateProperties.WATERLOGGED, water);
-            if (state != lit) {
-                level.setBlock(at, lit, Block.UPDATE_CLIENTS);
-            }
-            changed |= placed.add(packed);
-        }
-        return changed;
-    }
-
-    /** Takes away every light block {@code placed} holds, as its light is broken. */
     static void clear(Level level, Placed placed) {
         clear(placed, packed -> level.isLoaded(BlockPos.of(packed)), packed -> remove(level, BlockPos.of(packed)),
                 packed -> {
@@ -389,14 +146,12 @@ public final class RealLight {
             if (loaded.test(packed)) {
                 remove.accept(packed);
             } else {
-                // The fixture is going away; its block entity cannot remember this position any longer.
                 defer.accept(packed);
             }
         }
         placed.lights.clear();
     }
 
-    /** Removed fixtures' unloaded light blocks, saved with the dimension until their chunks return. */
     static final class Pending extends SavedData {
         static final String NAME = "create_large_lights_light_cleanup";
         static final Factory<Pending> FACTORY = new Factory<>(Pending::new, Pending::load);
@@ -442,6 +197,28 @@ public final class RealLight {
                 pending.removeLoaded(packed -> level.isLoaded(BlockPos.of(packed)),
                         packed -> remove(level, BlockPos.of(packed)));
             }
+        }
+    }
+
+    @SubscribeEvent
+    public static void chunkLoaded(ChunkEvent.Load event) {
+        if (event.getLevel() instanceof Level level) {
+            // The chunk need not be FULL yet; this only touches our cached data.
+            LightField.invalidateChunk(level, event.getChunk().getPos().x, event.getChunk().getPos().z);
+        }
+    }
+
+    @SubscribeEvent
+    public static void chunkUnloaded(ChunkEvent.Unload event) {
+        if (event.getLevel() instanceof Level level) {
+            LightField.unloadChunk(level, event.getChunk().getPos());
+        }
+    }
+
+    @SubscribeEvent
+    public static void levelUnloaded(LevelEvent.Unload event) {
+        if (event.getLevel() instanceof Level level) {
+            LightField.clear(level);
         }
     }
 

@@ -13,6 +13,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import io.github.jinsh1228.largelights.FloodlightBlock;
+import io.github.jinsh1228.largelights.client.LightModelSnapshots;
 import io.github.jinsh1228.largelights.client.ModelLightOcclusion;
 
 import net.minecraft.core.BlockPos;
@@ -26,6 +27,16 @@ abstract class LightingRaycastMixin {
     @Shadow @Final private Level level;
     @Shadow @Final private BlockPos ignored;
     @Unique private boolean createLargeLights$modelOcclusion;
+
+    @Inject(method = "sectionChanged", at = @At("HEAD"))
+    private static void createLargeLights$section(long key, CallbackInfo ci) {
+        LightModelSnapshots.sectionChanged(key);
+    }
+
+    @Inject(method = "chunkChanged", at = @At("HEAD"))
+    private static void createLargeLights$chunk(int x, int z, CallbackInfo ci) {
+        LightModelSnapshots.chunkChanged(x, z);
+    }
 
     @Inject(method = "<init>", at = @At("RETURN"))
     private void createLargeLights$fixture(CallbackInfo ci) {

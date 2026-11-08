@@ -75,16 +75,39 @@ if (providers.gradleProperty('demo').isPresent()) {
     neoForge.runs.client {
         gameDirectory = file('run-demo')
         systemProperty 'createLargeLights.demo', 'true'
+        systemProperty 'createLargeLights.demo.noScreenshots', providers.gradleProperty('externalCaptures').isPresent().toString()
         programArguments.addAll('--width', '1280', '--height', '720')
     }
 }
 
 // Focused rendering regression scene for non-cubic blocks: -PshapeDemo runClient.
-if (providers.gradleProperty('shapeDemo').isPresent()) {
+if (providers.gradleProperty('shapeDemo').isPresent() || providers.gradleProperty('fieldDemo').isPresent()
+        || providers.gradleProperty('productionDemo').isPresent() || providers.gradleProperty('farDemo').isPresent()) {
     sourceSets.main.java.srcDir('src/shapeDemo/java')
     neoForge.runs.client {
         gameDirectory = file('run-shapes')
         systemProperty 'createLargeLights.shapeDemo', 'true'
+        systemProperty 'createLargeLights.fieldDemo', providers.gradleProperty('fieldDemo').isPresent().toString()
+        systemProperty 'createLargeLights.productionDemo', providers.gradleProperty('productionDemo').isPresent().toString()
+        systemProperty 'createLargeLights.farDemo', providers.gradleProperty('farDemo').isPresent().toString()
+        systemProperty 'createLargeLights.farDistance', providers.gradleProperty('farDistance').getOrElse('128')
+        programArguments.addAll('--width', '1280', '--height', '720')
+    }
+}
+
+// Isolated CPU/GPU visibility comparison; this does not enable the prototype in a release build.
+def gpuDemo = providers.gradleProperty('gpuDemo').isPresent()
+if (gpuDemo) {
+    sourceSets.main.java.srcDirs('src/shapeDemo/java', 'src/gpuDemo/java')
+    sourceSets.main.resources.srcDir('src/gpuDemo/resources')
+    neoForge.runs.client {
+        gameDirectory = file('run-gpu-demo')
+        systemProperty 'createLargeLights.shapeDemo', 'true'
+        systemProperty 'createLargeLights.gpuDemo', 'true'
+        systemProperty 'createLargeLights.gpuDemo.mode', providers.gradleProperty('gpuMode').getOrElse('gpu')
+        systemProperty 'createLargeLights.gpuDemo.shadowSize', providers.gradleProperty('shadowSize').getOrElse('1024')
+        systemProperty 'createLargeLights.gpuDemo.lightCount', providers.gradleProperty('gpuLights').getOrElse('1')
+        systemProperty 'createLargeLights.gpuDemo.angle', providers.gradleProperty('gpuAngle').getOrElse('oblique')
         programArguments.addAll('--width', '1280', '--height', '720')
     }
 }
@@ -127,9 +150,16 @@ var generateModMetadata = tasks.register('generateModMetadata', ProcessResources
         mod_description: mod_description,
     ]
     inputs.properties replaceProperties
+    inputs.property 'gpuDemo', gpuDemo
     expand replaceProperties
     from 'src/main/templates'
     into 'build/generated/sources/modMetadata'
+    if (gpuDemo) {
+        doLast {
+            file('build/generated/sources/modMetadata/META-INF/neoforge.mods.toml').append(
+                    '\n[[mixins]]\nconfig="create_large_lights_gpu_demo.mixins.json"\n')
+        }
+    }
 }
 
 sourceSets.main.resources.srcDir generateModMetadata

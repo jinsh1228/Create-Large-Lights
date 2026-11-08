@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.Arrays;
 import java.util.stream.Stream;
 
 import com.mojang.logging.LogUtils;
@@ -13,6 +14,8 @@ import io.github.jinsh1228.largelights.ConsoleSettings;
 import io.github.jinsh1228.largelights.CreateLargeLights;
 import io.github.jinsh1228.largelights.FloodlightBlock;
 import io.github.jinsh1228.largelights.FloodlightConfig;
+import io.github.jinsh1228.largelights.LightField;
+import io.github.jinsh1228.largelights.LightFieldNetwork;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.AccessibilityOnboardingScreen;
@@ -25,6 +28,7 @@ import net.minecraft.world.Difficulty;
 import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
+import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.WorldDataConfiguration;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -43,6 +47,7 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.ScreenEvent;
+import net.neoforged.neoforge.event.tick.LevelTickEvent;
 
 import org.haruyq.createmediasystems.CreateMediaSystems;
 import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
@@ -57,11 +62,29 @@ import org.haruyq.createmediasystems.lighting.LightingRaycast;
 public final class ShapeLightingDemo {
     private static final String WORLD = "ShapeLightingDemo";
     private static final int FLOOR = 150;
-    private static final BlockPos LIGHT = new BlockPos(0, FLOOR + 8, -10);
+    private static final boolean GPU_TRIAL = Boolean.getBoolean("createLargeLights.gpuDemo");
+    private static final boolean FIELD_DEMO = Boolean.getBoolean("createLargeLights.fieldDemo");
+    private static final boolean VERTICAL = "vertical".equals(System.getProperty("createLargeLights.gpuDemo.angle", "oblique"));
+    private static final BlockPos LIGHT = new BlockPos(0, FLOOR + (GPU_TRIAL ? 24 : 8), GPU_TRIAL && VERTICAL ? 5 : -10);
     private static final BlockPos CONSOLE = new BlockPos(16, FLOOR + 1, -9);
+    private static final BlockPos FIELD_TEST = new BlockPos(0, FLOOR + 40, 0);
+    private static final BlockPos VANILLA_TEST = FIELD_TEST.offset(0, 0, -24);
+    private static final BlockPos[] SYNC_POINTS = {
+            new BlockPos(0, FLOOR + 3, 2), new BlockPos(0, FLOOR + 1, 6), new BlockPos(0, FLOOR + 3, -12)
+    };
     private static boolean started;
+    private static volatile boolean linkRequested;
+    private static boolean linked;
+    private static int linkAttempts;
     private static int ticks = -1;
-    private static int failures;
+    private static volatile int failures;
+    private static BlockState vanillaTestState;
+    private static volatile FieldSample fieldSample;
+    private static int syncPhase;
+    private static int syncChangedAt;
+
+    private record FieldSample(boolean enabled, int[] field, int[] block) {
+    }
 
     private ShapeLightingDemo() {
     }
@@ -106,11 +129,26 @@ public final class ShapeLightingDemo {
     @SubscribeEvent
     public static void tick(ClientTickEvent.Post event) {
         Minecraft mc = Minecraft.getInstance();
+        if (GpuFarDemo.enabled()) {
+            GpuFarDemo.tick(mc);
+            return;
+        }
+        if (!GPU_TRIAL) GpuProductionDemo.tick(mc, ticks, syncPhase == 4, failures);
         if (!enabled() || mc.level == null || mc.player == null || mc.getSingleplayerServer() == null) {
             return;
         }
         ticks++;
         var server = mc.getSingleplayerServer();
+        if (!GPU_TRIAL) {
+            failures += ModelDataDemo.tick(mc, ticks);
+            checkFieldSync(mc);
+            if (FIELD_DEMO && !GpuProductionDemo.enabled() && ticks == 1100) {
+                check(syncPhase == 4, "client/server illumination sync, live fade and switch-off checks completed");
+                LogUtils.getLogger().info("SHAPE field demo done: {} checks failed", failures);
+                mc.stop();
+                return;
+            }
+        }
         if (ticks == 20) {
             server.execute(() -> build(server.overworld()));
         } else if (ticks == 80) {
@@ -119,22 +157,27 @@ public final class ShapeLightingDemo {
                 LogUtils.getLogger().info("SHAPE VIEW overview: ticks 80-799; lanes left-to-right bars, fence, bottom slab, top slab, stairs, cube, double slab");
             });
         } else if (ticks == 120) {
-            server.execute(() -> link(server.overworld()));
+            linkRequested = true;
         } else if (ticks == 240) {
             server.execute(() -> checkScene(server.overworld()));
         } else if (ticks == 360) {
-            checkRenderingRays(mc);
-        } else if (ticks == 800) {
+            if (!GPU_TRIAL) {
+                checkRenderingRays(mc);
+                server.execute(() -> checkLightField(server.overworld()));
+            }
+        } else if (!GpuProductionDemo.enabled() && ticks == (GPU_TRIAL ? 550 : 800)) {
             server.execute(() -> {
-                view(server, new Vec3(-15.5, FLOOR + 4.5, -2.5), new Vec3(-9.5, FLOOR + 1.8, 5.5));
-                LogUtils.getLogger().info("SHAPE VIEW bars and fence: ticks 800-1399");
+                view(server, GPU_TRIAL ? new Vec3(-3.5, FLOOR + 7, -7.5)
+                        : new Vec3(-15.5, FLOOR + 4.5, -2.5),
+                        GPU_TRIAL ? new Vec3(-12.5, FLOOR + 2, 5.5) : new Vec3(-9.5, FLOOR + 1.8, 5.5));
+                LogUtils.getLogger().info("SHAPE VIEW bars and fence");
             });
-        } else if (ticks == 1400) {
+        } else if (!GpuProductionDemo.enabled() && ticks == (GPU_TRIAL ? 800 : 1400)) {
             server.execute(() -> {
                 view(server, new Vec3(8.5, FLOOR + 4.5, -2.5), new Vec3(0.5, FLOOR + 1, 5.5));
-                LogUtils.getLogger().info("SHAPE VIEW slabs and stairs: ticks 1400-1999");
+                LogUtils.getLogger().info("SHAPE VIEW slabs and stairs");
             });
-        } else if (ticks == 2000) {
+        } else if (ticks == (GPU_TRIAL ? 1000 : 2000)) {
             LogUtils.getLogger().info("SHAPE demo done: {} checks failed", failures);
             mc.stop();
         }
@@ -143,17 +186,18 @@ public final class ShapeLightingDemo {
     private static void build(ServerLevel level) {
         level.setDayTime(18000);
         level.setWeatherParameters(6000, 0, false, false);
-        FloodlightConfig.REAL_LIGHT.set(true);
+        FloodlightConfig.REAL_LIGHT.set(!GPU_TRIAL);
         BlockState wall = Blocks.LIGHT_GRAY_CONCRETE.defaultBlockState();
+        int roof = FLOOR + (GPU_TRIAL ? 30 : 14);
         for (int x = -20; x <= 20; x++) {
             for (int z = -14; z <= 18; z++) {
                 level.setBlock(new BlockPos(x, FLOOR, z), Blocks.WHITE_CONCRETE.defaultBlockState(), Block.UPDATE_CLIENTS);
-                for (int y = FLOOR + 1; y < FLOOR + 14; y++) {
+                for (int y = FLOOR + 1; y < roof; y++) {
                     boolean edge = x == -20 || x == 20 || z == -14 || z == 18;
                     level.setBlock(new BlockPos(x, y, z), edge ? wall : Blocks.AIR.defaultBlockState(),
                             Block.UPDATE_CLIENTS);
                 }
-                level.setBlock(new BlockPos(x, FLOOR + 14, z), wall, Block.UPDATE_CLIENTS);
+                level.setBlock(new BlockPos(x, roof, z), wall, Block.UPDATE_CLIENTS);
             }
         }
 
@@ -204,11 +248,16 @@ public final class ShapeLightingDemo {
                 .setValue(FloodlightBlock.FACING, Direction.DOWN).setValue(FloodlightBlock.POWER, 15), Block.UPDATE_ALL);
         level.setBlock(LIGHT.above(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
         if (level.getBlockEntity(LIGHT) instanceof FloodlightBlock.Entity light) {
-            float[] aim = Aim.toward(new Vec3(0.5, FLOOR + 1, 6).subtract(Vec3.atCenterOf(LIGHT)), 0);
+            float[] aim = GPU_TRIAL && VERTICAL ? new float[]{0, 90}
+                    : Aim.toward(new Vec3(0.5, FLOOR + 1, 6).subtract(Vec3.atCenterOf(LIGHT)), 0);
             light.spread = 3;
             light.aim(aim[0], aim[1]);
         }
         buildConsole(level);
+        if (!GPU_TRIAL) {
+            vanillaTestState = level.getBlockState(VANILLA_TEST);
+            level.setBlock(VANILLA_TEST, Blocks.SEA_LANTERN.defaultBlockState(), Block.UPDATE_ALL);
+        }
         LogUtils.getLogger().info("SHAPE scene built at Y{}; only fixture light, bars x-12, fence x-8, bottom slabs x-4, top slabs x0, stairs x4, cubes x8, double slabs x12", FLOOR);
     }
 
@@ -230,12 +279,22 @@ public final class ShapeLightingDemo {
         }
     }
 
-    private static void link(ServerLevel level) {
-        var console = LightingConsoleBlock.find(level, CONSOLE);
-        check(console != null && console.formed, "lighting console formed");
-        if (console == null || !console.formed || !(level.getBlockEntity(LIGHT) instanceof FloodlightBlock.Entity light)) {
+    @SubscribeEvent
+    public static void linkWhenFormed(LevelTickEvent.Post event) {
+        if (!enabled() || !linkRequested || linked || !(event.getLevel() instanceof ServerLevel level)
+                || level.dimension() != net.minecraft.world.level.Level.OVERWORLD) {
             return;
         }
+        var console = LightingConsoleBlock.find(level, CONSOLE);
+        if (console == null || !console.formed || !(level.getBlockEntity(LIGHT) instanceof FloodlightBlock.Entity light)) {
+            if (++linkAttempts == 40) {
+                check(false, "lighting console formed within 40 server ticks");
+                linkRequested = false;
+            }
+            return;
+        }
+        linked = true;
+        check(true, "lighting console formed");
         console = console.controller();
         check(console.bind(light, 0), "stadium light linked");
         console.settings.master = 1;
@@ -251,7 +310,7 @@ public final class ShapeLightingDemo {
         group.colorCycle = false;
         group.audio = false;
         ConsoleSettings.setSpread(console, 0, 80);
-        ConsoleSettings.setRealLight(console, 0, true);
+        ConsoleSettings.setRealLight(console, 0, !GPU_TRIAL);
         console.changed();
     }
 
@@ -260,30 +319,13 @@ public final class ShapeLightingDemo {
         if (level.getBlockEntity(LIGHT) instanceof FloodlightBlock.Entity light) {
             var beam = light.beam();
             check(beam.strength() == 1 && beam.console() != null, "cyan beam enabled");
-            long[] sources = light.lightBlocks();
-            check(sources.length > 0 && FloodlightConfig.REAL_LIGHT.get(), "fixture provides the real light sources");
-            Vec3 forward = Aim.direction(beam.yaw(), beam.pitch());
-            Vec3 origin = Vec3.atCenterOf(LIGHT).add(forward.scale(light.kind().lensZ + 0.01));
-            double tangent = Math.tan(Math.toRadians(beam.spread()) / 2);
-            boolean inside = true;
-            for (long packed : sources) {
-                BlockPos at = BlockPos.of(packed);
-                double x = at.getX() + 0.5 - origin.x;
-                double y = at.getY() + 0.5 - origin.y;
-                double z = at.getZ() + 0.5 - origin.z;
-                double along = x * forward.x + y * forward.y + z * forward.z;
-                double radius = along * tangent;
-                inside &= along > 0 && along < beam.range()
-                        && Math.max(0, x * x + y * y + z * z - along * along) < radius * radius;
-            }
-            check(inside, "every real light source centre is inside the rendered beam");
-            int allSources = 0;
+            check(FloodlightConfig.REAL_LIGHT.get() != GPU_TRIAL,
+                    GPU_TRIAL ? "real lighting disabled to isolate the projection trial" : "real lighting enabled");
+            int physical = 0;
             for (BlockPos at : BlockPos.betweenClosed(-20, FLOOR + 1, -14, 20, FLOOR + 13, 18)) {
-                if (level.getBlockState(at).is(Blocks.LIGHT)) {
-                    allSources++;
-                }
+                if (level.getBlockState(at).is(Blocks.LIGHT)) physical++;
             }
-            check(allSources == sources.length, "the room has no light sources other than the fixture's " + sources.length);
+            check(physical == 0, "the room contains no physical light blocks");
         }
         check(level.getBlockState(new BlockPos(-12, FLOOR + 2, 5)).is(Blocks.IRON_BARS), "iron bars panel exists");
         check(level.getBlockState(new BlockPos(-8, FLOOR + 1, 5)).is(Blocks.OAK_FENCE), "connected fence panel exists");
@@ -292,6 +334,140 @@ public final class ShapeLightingDemo {
         check(level.getBlockState(new BlockPos(0, FLOOR + 1, 5)).getValue(SlabBlock.TYPE) == SlabType.TOP,
                 "top slab has an open lower half");
         check(level.getBlockState(new BlockPos(4, FLOOR + 1, 5)).is(Blocks.QUARTZ_STAIRS), "stairs exist");
+    }
+
+    /** Query the installed block-light hook, including world changes that must invalidate cached rays. */
+    private static void checkLightField(ServerLevel level) {
+        BlockPos second = FIELD_TEST.east();
+        BlockPos target = FIELD_TEST.offset(0, 0, 8);
+        BlockPos obstruction = FIELD_TEST.offset(0, 0, 4);
+        BlockState previous = level.getBlockState(obstruction);
+        Vec3 origin = Vec3.atCenterOf(FIELD_TEST).add(0, .25, 0);
+        LightField.Beam beam = new LightField.Beam(origin, new Vec3(0, 0, 1), .5, 32, 1, 6, 4);
+        int sky = level.getBrightness(LightLayer.SKY, target);
+        try {
+            check(level.getBrightness(LightLayer.BLOCK, target) == 0, "isolated field test starts dark");
+            LightField.update(level, FIELD_TEST, beam);
+            check(level.getBrightness(LightLayer.BLOCK, target) == 6, "block-light engine reads fixture level 6");
+            check(level.getBrightness(LightLayer.BLOCK, FIELD_TEST.offset(4, 0, 8)) == 0,
+                    "fixture light stops exactly outside the cone");
+            check(level.getBrightness(LightLayer.BLOCK, FIELD_TEST.offset(0, 0, -2)) == 0,
+                    "fixture light does not propagate behind its source");
+            check(level.getBrightness(LightLayer.BLOCK, VANILLA_TEST) == 15,
+                    "vanilla sea-lantern light remains 15 outside the cone");
+            check(level.getBrightness(LightLayer.SKY, target) == sky, "fixture light leaves sky light unchanged");
+
+            LightField.update(level, second, beam);
+            check(level.getBrightness(LightLayer.BLOCK, target) == 12, "overlapping level 6 fixtures add to 12");
+            LightField.update(level, second, new LightField.Beam(origin, new Vec3(0, 0, 1), .5, 32, 1, 15, 4));
+            check(level.getBrightness(LightLayer.BLOCK, target) == 15, "overlapping fixture levels saturate at 15");
+            LightField.remove(level, second);
+            check(level.getBrightness(LightLayer.BLOCK, target) == 6, "removing one fixture preserves the other");
+
+            level.setBlock(obstruction, Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+            check(level.getBrightness(LightLayer.BLOCK, target) == 0, "adding an opaque block invalidates cached light");
+            level.setBlock(obstruction, Blocks.SMOOTH_STONE_SLAB.defaultBlockState(), Block.UPDATE_ALL);
+            check(level.getBrightness(LightLayer.BLOCK, target) == 6, "light passes above a bottom slab");
+            level.setBlock(obstruction, Blocks.SMOOTH_STONE_SLAB.defaultBlockState()
+                    .setValue(SlabBlock.TYPE, SlabType.TOP), Block.UPDATE_ALL);
+            check(level.getBrightness(LightLayer.BLOCK, target) == 0, "the same ray stops at a top slab");
+            for (Block transparent : new Block[]{Blocks.IRON_BARS, Blocks.OAK_FENCE, Blocks.GLASS, Blocks.WATER}) {
+                level.setBlock(obstruction, transparent.defaultBlockState(), Block.UPDATE_ALL);
+                check(level.getBrightness(LightLayer.BLOCK, target) == 6,
+                        "common block light transmits through " + transparent);
+            }
+            level.setBlock(obstruction, previous, Block.UPDATE_ALL);
+            check(level.getBrightness(LightLayer.BLOCK, target) == 6, "removing the obstruction restores cached light");
+            LightField.remove(level, FIELD_TEST);
+            check(level.getBrightness(LightLayer.BLOCK, target) == 0, "removing all fixtures removes their illumination");
+
+            int physical = 0;
+            for (BlockPos at : BlockPos.betweenClosed(FIELD_TEST.offset(-4, -4, -4), FIELD_TEST.offset(4, 4, 36))) {
+                if (level.getBlockState(at).is(Blocks.LIGHT)) physical++;
+            }
+            check(physical == 0, "light-field updates create no physical light blocks");
+        } finally {
+            LightField.remove(level, FIELD_TEST);
+            LightField.remove(level, second);
+            level.setBlock(obstruction, previous, Block.UPDATE_ALL);
+            level.setBlock(VANILLA_TEST, vanillaTestState, Block.UPDATE_ALL);
+        }
+    }
+
+    /** Wait for the actual fixture's subscribed sections, then verify that switching it off clears the client. */
+    private static void checkFieldSync(Minecraft mc) {
+        var server = mc.getSingleplayerServer();
+        if (ticks == 420) {
+            syncPhase = 1;
+            syncChangedAt = ticks;
+            server.execute(() -> recordFieldSample(server.overworld(), true));
+        }
+        if (syncPhase == 6 && GpuProductionDemo.readyForFade(mc, ticks)) {
+            syncPhase = 2;
+            FieldFadeDemo.start(mc, CONSOLE, SYNC_POINTS[0]);
+            GpuProductionDemo.fadeStarted();
+        }
+        if (syncPhase == 2 && FieldFadeDemo.tick(mc)) {
+            failures += FieldFadeDemo.failures();
+            GpuProductionDemo.fadeFinished(mc, ticks);
+            syncPhase = 5;
+            syncChangedAt = ticks;
+            server.execute(() -> {
+                var console = LightingConsoleBlock.find(server.overworld(), CONSOLE);
+                check(console != null, "fixture console exists for illumination switch-off");
+                if (console != null) {
+                    console = console.controller();
+                    ConsoleSettings.setRealLight(console, 0, false);
+                    console.changed();
+                }
+            });
+        }
+        if (syncPhase == 5 && ticks - syncChangedAt >= 30) {
+            syncPhase = 3;
+            syncChangedAt = ticks;
+            server.execute(() -> recordFieldSample(server.overworld(), false));
+        }
+        FieldSample expected = fieldSample;
+        if (expected == null || syncPhase != 1 && syncPhase != 3 || expected.enabled != (syncPhase == 1)) {
+            return;
+        }
+        int[] field = new int[SYNC_POINTS.length], block = new int[SYNC_POINTS.length];
+        for (int i = 0; i < SYNC_POINTS.length; i++) {
+            field[i] = LightField.sample(mc.level, SYNC_POINTS[i]);
+            block[i] = mc.level.getBrightness(LightLayer.BLOCK, SYNC_POINTS[i]);
+        }
+        boolean matches = Arrays.equals(field, expected.field) && Arrays.equals(block, expected.block);
+        int waited = ticks - syncChangedAt;
+        if (!matches && waited < (expected.enabled ? 230 : 80)) {
+            return;
+        }
+        check(matches && (!expected.enabled || expected.field[0] > 0),
+                "client illumination " + (expected.enabled ? "arrives" : "clears after switch-off")
+                        + "; field=" + Arrays.toString(field) + ", expected=" + Arrays.toString(expected.field)
+                        + ", block=" + Arrays.toString(block) + ", waited=" + waited + " ticks");
+        server.execute(() -> LogUtils.getLogger().info("SHAPE FIELD SYNC metrics {}",
+                LightFieldNetwork.metrics(server.overworld())));
+        if (expected.enabled) {
+            syncPhase = GpuProductionDemo.enabled() ? 6 : 2;
+            syncChangedAt = ticks;
+            if (syncPhase == 2) FieldFadeDemo.start(mc, CONSOLE, SYNC_POINTS[0]);
+        } else {
+            syncPhase = 4;
+        }
+    }
+
+    private static void recordFieldSample(ServerLevel level, boolean enabled) {
+        int[] field = new int[SYNC_POINTS.length], block = new int[SYNC_POINTS.length];
+        for (int i = 0; i < SYNC_POINTS.length; i++) {
+            field[i] = LightField.sample(level, SYNC_POINTS[i]);
+            block[i] = level.getBrightness(LightLayer.BLOCK, SYNC_POINTS[i]);
+        }
+        check(enabled ? field[0] > 0 && field[2] == 0 : Arrays.stream(field).allMatch(value -> value == 0),
+                "server illumination " + (enabled ? "has a lit air sample and dark rear sample" : "is off")
+                        + "; field=" + Arrays.toString(field));
+        LogUtils.getLogger().info("SHAPE FIELD SYNC server enabled={}, field={}, block={}, metrics={}",
+                enabled, Arrays.toString(field), Arrays.toString(block), LightFieldNetwork.metrics(level));
+        fieldSample = new FieldSample(enabled, field, block);
     }
 
     /** Exercise the installed CMS mixin against the actual baked models and their texture alpha. */
@@ -344,7 +520,7 @@ public final class ShapeLightingDemo {
                 "stairs stop a ray at the lower tread rather than the enclosing cube");
     }
 
-    private static void check(boolean passed, String message) {
+    private static synchronized void check(boolean passed, String message) {
         if (!passed) {
             failures++;
         }

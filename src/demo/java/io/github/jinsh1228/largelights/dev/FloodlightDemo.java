@@ -13,6 +13,7 @@ import com.mojang.logging.LogUtils;
 import io.github.jinsh1228.largelights.Aim;
 import io.github.jinsh1228.largelights.CreateLargeLights;
 import io.github.jinsh1228.largelights.FloodlightBlock;
+import io.github.jinsh1228.largelights.LightField;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
@@ -232,11 +233,12 @@ public final class FloodlightDemo {
         int[][] spots = {{0, 0}, {8, 8}, {16, 16}, {-20, -20}, {-27, 27}};
         for (int[] spot : spots) {
             int light = blockLight(level, spot[0], spot[1]);
-            check(light >= 10, "floor block light at ({}, {}) is {}, vanilla's lamps reach none of it", spot[0], spot[1],
+            check(light > 0 && light == LightField.sample(level, new BlockPos(spot[0], FLOOR + 1, spot[1])),
+                    "floor block light at ({}, {}) is {} from the illumination field", spot[0], spot[1],
                     light);
         }
         int placed = lightBlocksInHall(level);
-        check(placed > 20, "{} light blocks placed in the hall", placed);
+        check(placed == 0, "{} invisible light blocks placed in the hall", placed);
         FloodlightBlock.Entity corner = fixture(level, CORNER_LIGHT);
         check(corner.beam().strength() == 1 && corner.beam().console() == null,
                 "unlinked, on a redstone block: strength {}", corner.beam().strength());
@@ -329,20 +331,15 @@ public final class FloodlightDemo {
         var beam = center.beam();
         check(beam.spread() == 70, "the page's 80° beam width stops at a floodlight's 70°: {}", beam.spread());
         check(beam.lightLimit() == 8, "the page holds its real light to level {}", beam.lightLimit());
-        long[] lights = center.lightBlocks();
-        boolean levels = lights.length > 0;
-        for (long packed : lights) {
-            var state = level.getBlockState(BlockPos.of(packed));
-            levels &= state.is(Blocks.LIGHT) && state.getValue(net.minecraft.world.level.block.LightBlock.LEVEL) == 8;
-        }
-        check(levels, "at full brightness, its {} light blocks are at level 8, the page's limit", lights.length);
+        int light = blockLight(level, -15, 0);
+        check(light > 0 && light <= 8, "the field respects the page's maximum level 8: {}", light);
         page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.REAL_LIGHT, 0, 0);
     }
 
     private static void checkRealLightOff(ServerLevel level) {
         FloodlightBlock.Entity center = fixture(level, CENTER_LIGHT);
-        check(center.lightBlocks().length == 0 && center.beam().strength() > 0,
-                "real light off on the page: still lit, {} light blocks", center.lightBlocks().length);
+        check(LightField.sample(level, new BlockPos(-15, FLOOR + 1, 0)) == 0 && center.beam().strength() > 0,
+                "real light off on the page: visual beam remains lit and the real field is zero");
         page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.REAL_LIGHT, 0, 1);
         // Recall "off" (every group at 0%) over the 1.5 s fade.
         page(level, io.github.jinsh1228.largelights.ConsolePacket.Action.RECALL, 3, 0);
@@ -437,8 +434,8 @@ public final class FloodlightDemo {
 
     private static void checkStreetNight(ServerLevel level) {
         for (int i = 0; i < STREET_X.length; i++) {
-            check(streetLit(level, i) && street(level, i).lightCount() > 0,
-                    "street light {} lit by night, {} light blocks", i + 1, street(level, i).lightCount());
+            check(streetLit(level, i) && LightField.sample(level, new BlockPos(STREET_X[i], FLOOR + 1, 0)) > 0,
+                    "street light {} lights the road through its field", i + 1);
         }
         // The road under the middle light, 6 blocks down: past a lamp's own reach, lit by its light blocks.
         int light = level.getBrightness(net.minecraft.world.level.LightLayer.BLOCK, new BlockPos(STREET_X[1], FLOOR + 1, 0));
@@ -453,8 +450,8 @@ public final class FloodlightDemo {
 
     private static void checkStreetDay(ServerLevel level) {
         for (int i = 0; i < STREET_X.length; i++) {
-            check(!streetLit(level, i) && street(level, i).lightCount() == 0,
-                    "street light {} out by day, {} light blocks left", i + 1, street(level, i).lightCount());
+            check(!streetLit(level, i) && LightField.sample(level, new BlockPos(STREET_X[i], FLOOR + 1, 0)) == 0,
+                    "street light {} out by day, field removed", i + 1);
         }
         level.setDayTime(18000);
     }
@@ -510,25 +507,13 @@ public final class FloodlightDemo {
         check(Math.abs(beam.strength() - 0.4f) < 1e-4, "brightness from the console: {}", beam.strength());
         check(beam.spread() == 18, "beam width from the console's floodlight page: {}", beam.spread());
         check(beam.range() == 120, "reach from the console: {}", beam.range());
-        int expected = io.github.jinsh1228.largelights.RealLight.lightLevel(0.4f);
-        long[] lights = center.lightBlocks();
-        // Neighbouring floodlights may already hold the cells under it (each cell has one owner): the count may be 0.
-        boolean levels = true;
-        for (long packed : lights) {
-            var state = level.getBlockState(BlockPos.of(packed));
-            levels &= state.is(Blocks.LIGHT) && state.getValue(net.minecraft.world.level.block.LightBlock.LEVEL) == expected;
-        }
-        check(levels && lights.length > 0, "its {} light blocks are all at level {}, as the console's brightness",
-                lights.length, expected);
+        int light = blockLight(level, -15, 0);
+        check(light > 0 && light <= 6, "the linked field follows brightness and distance: {}", light);
         check(Math.abs(beam.pitch() - 60) < 1e-3 && Math.abs(Math.abs(beam.yaw()) - 90) < 1e-3,
                 "aimed by the console's pan and tilt: yaw {}, pitch {}", beam.yaw(), beam.pitch());
-        double x = 0;
-        for (long packed : lights) {
-            x += BlockPos.of(packed).getX();
-        }
-        x /= Math.max(1, lights.length);
-        // 27 blocks up, 60° down, facing west: the light falls about 16 blocks west of straight below.
-        check(x < -10 && x > -22, "its light falls west of it, around x {}", Math.round(x));
+        check(LightField.sample(level, new BlockPos(-15, FLOOR + 1, 0)) > 0
+                        && LightField.sample(level, new BlockPos(15, FLOOR + 1, 0)) == 0,
+                "the linked field illuminates the west target and stays zero outside the cone");
         float spread = center.beam().spread();
         wrench(level, CENTER_LIGHT);
         check(center.beam().spread() == spread, "the wrench leaves a linked floodlight's beam width to the console");
@@ -538,6 +523,7 @@ public final class FloodlightDemo {
     }
 
     private static void shot(Minecraft mc, String name) {
+        if (Boolean.getBoolean("createLargeLights.demo.noScreenshots")) return;
         Screenshot.grab(mc.gameDirectory, name, mc.getMainRenderTarget(),
                 message -> LogUtils.getLogger().info("Floodlight demo: {}", message.getString()));
     }

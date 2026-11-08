@@ -9,4 +9,5 @@ libs/
 /logs/
 run-demo/
 run-shapes/
+run-gpu-demo/
 dist/

@@ -34,8 +34,8 @@ import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * A floodlight's body, aimed as it is, and its light: Create: Media Systems lays it on the faces the beam falls on
- * (LightingIllumination), and a faint cone shows it in the air, stopped where each edge meets a block.
+ * A floodlight's body and aimed light. GPU projection lights its surfaces; CMS retains compatible fallbacks,
+ * lenses and the air beam stopped where each edge meets a block.
  */
 public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightBlock.Entity> {
     private static final int EDGES = 16;
@@ -199,10 +199,12 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         trace.update(lamp, rays, origin, direction, right, up, Math.tan(halfAngle), beam.range());
         MultiBufferSource effects = LightingRenderer.beamBuffers(level, buffers);
         boolean realLight = FloodlightConfig.SPEC.isLoaded() && FloodlightConfig.REAL_LIGHT.get();
-        LightingIllumination.render(lamp, origin, direction, halfAngle, beam.range(),
-                strength * overlay(kind, realLight, beam.lightLimit()), color,
-                trace.center,
-                rays, model, effects, kind.radius);
+        float surfaceStrength = strength * overlay(kind, realLight, beam.lightLimit());
+        if (!GpuLightProjection.queue(lamp, origin, direction, up, halfAngle, beam.range(),
+                surfaceStrength, color, kind.radius)) {
+            LightingIllumination.render(lamp, origin, direction, halfAngle, beam.range(), surfaceStrength, color,
+                    trace.center, rays, model, effects, kind.radius);
+        }
         // The camera is at the frame's origin: the pose's translation is how far off the floodlight is.
         float distanceSqr = model.m30() * model.m30() + model.m31() * model.m31() + model.m32() * model.m32();
         cone(effects.getBuffer(LightingRenderer.beamType()), model, trace, origin, right, up,

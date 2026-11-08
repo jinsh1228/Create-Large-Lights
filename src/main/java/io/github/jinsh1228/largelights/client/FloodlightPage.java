@@ -50,21 +50,19 @@ public final class FloodlightPage implements LightingConsolePage {
         LightingConsolePage.register(CreateLargeLights.MOD_ID, new FloodlightPage());
     }
 
-    /** The selected group's floodlights here, and the light blocks they keep. */
-    private static int[] fixtures(LightingConsoleBlock.Entity console) {
+    /** The selected group's loaded floodlights. */
+    private static int fixtures(LightingConsoleBlock.Entity console) {
         int count = 0;
-        int lights = 0;
         var level = console.getLevel();
         if (level != null) {
             for (BlockPos pos : console.fixtures) {
                 if (level.isLoaded(pos) && level.getBlockEntity(pos) instanceof FloodlightBlock.Entity light
                         && light.group == console.settings.selectedGroup) {
                     count++;
-                    lights += light.lightCount();
                 }
             }
         }
-        return new int[]{count, lights};
+        return count;
     }
 
     private static MutableComponent text(String key, Object... args) {
@@ -270,7 +268,7 @@ public final class FloodlightPage implements LightingConsolePage {
             surface.knob((knob.left() + knob.right()) / 2, KNOB_Z, i == 2 && !real ? 0x4A5468 : 0xB6C3D9, values[i]);
             surface.deckText(knob.left() - 0.01f, 1.2f, plain(knobs[i]), 0xE6F1FF, 0.22f);
         }
-        int[] fixtures = fixtures(console);
+        int fixtures = fixtures(console);
         surface.monitorText(3.08f, rowTop(0) - 0.015f, text("spread_now",
                 LightingText.number(Math.round(spread) + "°"), LightingText.number(Math.round(group.range) + " m")), 0.84f);
         surface.monitorText(3.08f, rowTop(1) - 0.015f, text("aim_now", LightingText.number(signed(group.pan) + "°"),
@@ -279,8 +277,7 @@ public final class FloodlightPage implements LightingConsolePage {
                 real ? 0x1F4A33 : 0x3A1F25);
         surface.monitorText(3.08f, rowTop(REAL_LIGHT_ROW) - 0.015f, text("real_now", LightingText.on(real),
                 LightingText.number(level)), 0.84f);
-        surface.monitorText(3.08f, rowTop(3) - 0.015f, text("fixtures_now", LightingText.number(fixtures[0]),
-                LightingText.number(fixtures[1])), 0.84f);
+        surface.monitorText(3.08f, rowTop(3) - 0.015f, text("fixtures_now", LightingText.number(fixtures)), 0.84f);
         surface.monitorText(3.08f, rowTop(MOTION_ROW) - 0.015f, text("motion_now",
                 LightingText.mode("motion", group.motion)), 0.84f);
         surface.monitorText(3.08f, rowTop(TARGET_ROW) - 0.015f, text("target_now", target(console)), 0.84f);

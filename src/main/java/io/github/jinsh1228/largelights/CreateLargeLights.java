@@ -49,8 +49,7 @@ public class CreateLargeLights {
             () -> new LightPoleBlock(BlockBehaviour.Properties.ofFullCopy(Blocks.IRON_BARS).strength(3).noOcclusion()));
     public static final DeferredItem<BlockItem> LIGHT_POLE_ITEM = ITEMS.registerSimpleBlockItem("light_pole", LIGHT_POLE);
     public static final DeferredBlock<StreetLightBlock> STREET_LIGHT = BLOCKS.register("street_light",
-            () -> new StreetLightBlock(BlockBehaviour.Properties.ofFullCopy(Blocks.IRON_BLOCK).strength(3).noOcclusion()
-                    .lightLevel(state -> state.getValue(StreetLightBlock.LIT) ? 15 : 0)));
+            () -> new StreetLightBlock(BlockBehaviour.Properties.ofFullCopy(Blocks.IRON_BLOCK).strength(3).noOcclusion()));
     public static final DeferredItem<BlockItem> STREET_LIGHT_ITEM = ITEMS.registerSimpleBlockItem("street_light", STREET_LIGHT);
     public static final Supplier<BlockEntityType<StreetLightBlock.Entity>> STREET_LIGHT_ENTITY = BLOCK_ENTITIES.register(
             "street_light", () -> BlockEntityType.Builder.of(StreetLightBlock.Entity::new, STREET_LIGHT.get()).build(null));
@@ -79,6 +78,7 @@ public class CreateLargeLights {
         var registrar = event.registrar("1");
         AimPacket.register(registrar);
         ConsolePacket.register(registrar);
+        LightFieldPacket.register(registrar);
     }
 
     private static void addToTab(BuildCreativeModeTabContentsEvent event) {

@@ -1,20 +1,10 @@
 package io.github.jinsh1228.largelights.client;
 
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.block.model.BakedQuad;
-import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.util.Mth;
-import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.RenderShape;
@@ -24,27 +14,23 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.Shapes;
-import net.neoforged.neoforge.client.model.IQuadTransformer;
-import net.neoforged.neoforge.client.model.data.ModelData;
 
 /** Occlusion against the surfaces actually drawn, including the holes in cutout textures. */
 public final class ModelLightOcclusion {
     private static final double EPSILON = 1e-9;
-    private static volatile Cache cache = new Cache();
 
     private ModelLightOcclusion() {
     }
 
     /** Drops model and heap texture snapshots together when resources are reloaded. */
     public static void clear() {
-        cache = new Cache();
+        LightModelSnapshots.clear();
     }
 
     /** CMS's block-space trace: its outer clip still handles screens, sub-level poses and the nearest hit. */
     public static BlockHitResult trace(Level level, BlockPos ignored, Vec3 from, Vec3 to,
                                        Predicate<BlockPos> allowed) {
-        Cache snapshot = cache;
-        return BlockGetter.traverseBlocks(from, to, snapshot, (models, pos) -> {
+        return BlockGetter.traverseBlocks(from, to, level, (world, pos) -> {
             if (pos.equals(ignored) || !allowed.test(pos) || level.isOutsideBuildHeight(pos)) {
                 return null;
             }
@@ -63,7 +49,7 @@ public final class ModelLightOcclusion {
             if (state.getRenderShape() != RenderShape.MODEL) {
                 return state.getCollisionShape(level, pos, CollisionContext.empty()).clip(from, to, pos);
             }
-            List<Quad> quads = models.quads(state);
+            List<Quad> quads = LightModelSnapshots.occluders(level, pos, state);
             if (quads.isEmpty()) {
                 return state.getCollisionShape(level, pos, CollisionContext.empty()).clip(from, to, pos);
             }
@@ -71,7 +57,7 @@ public final class ModelLightOcclusion {
             Hit hit = intersect(quads, from.subtract(offset), to.subtract(offset));
             return hit == null ? null : new BlockHitResult(from.lerp(to, hit.fraction()),
                     Direction.getNearest(hit.normal().x, hit.normal().y, hit.normal().z), pos.immutable(), false);
-        }, models -> null);
+        }, world -> null);
     }
 
     @FunctionalInterface
@@ -128,63 +114,5 @@ public final class ModelLightOcclusion {
         }
         Vec3 normal = edge1.cross(edge2).normalize();
         return new Hit(fraction, normal.dot(delta) > 0 ? normal.scale(-1) : normal);
-    }
-
-    private static final class Cache {
-        final Map<BlockState, List<Quad>> models = new ConcurrentHashMap<>();
-        final Map<TextureAtlasSprite, Alpha> sprites = new ConcurrentHashMap<>();
-
-        List<Quad> quads(BlockState state) {
-            List<Quad> known = models.get(state);
-            if (known != null) {
-                return known;
-            }
-            // Native sprite pixels are copied only on the render thread, where reloads also close them.
-            // Never hold a computeIfAbsent lock while a worker waits for that thread.
-            if (!RenderSystem.isOnRenderThread()) {
-                return Minecraft.getInstance().submit(() -> quads(state)).join();
-            }
-            return models.computeIfAbsent(state, this::bake);
-        }
-
-        private List<Quad> bake(BlockState state) {
-            var model = Minecraft.getInstance().getBlockRenderer().getBlockModel(state);
-            RandomSource random = RandomSource.create(42);
-            List<Quad> result = new ArrayList<>();
-            for (int side = 0; side <= 6; side++) {
-                random.setSeed(42);
-                Direction direction = side == 6 ? null : Direction.from3DDataValue(side);
-                for (BakedQuad baked : model.getQuads(state, direction, random, ModelData.EMPTY, null)) {
-                    TextureAtlasSprite sprite = baked.getSprite();
-                    Alpha alpha = sprites.computeIfAbsent(sprite, Cache::pixels);
-                    int[] data = baked.getVertices();
-                    Vec3[] points = new Vec3[4];
-                    float[] uv = new float[8];
-                    for (int i = 0; i < 4; i++) {
-                        int base = i * IQuadTransformer.STRIDE;
-                        points[i] = new Vec3(Float.intBitsToFloat(data[base + IQuadTransformer.POSITION]),
-                                Float.intBitsToFloat(data[base + IQuadTransformer.POSITION + 1]),
-                                Float.intBitsToFloat(data[base + IQuadTransformer.POSITION + 2]));
-                        uv[i * 2] = sprite.getUOffset(Float.intBitsToFloat(data[base + IQuadTransformer.UV0]));
-                        uv[i * 2 + 1] = sprite.getVOffset(Float.intBitsToFloat(data[base + IQuadTransformer.UV0 + 1]));
-                    }
-                    result.add(new Quad(points, uv, alpha));
-                }
-            }
-            return List.copyOf(result);
-        }
-
-        private static Alpha pixels(TextureAtlasSprite sprite) {
-            int width = sprite.contents().width();
-            int height = sprite.contents().height();
-            boolean[] opaque = new boolean[width * height];
-            for (int y = 0; y < height; y++) {
-                for (int x = 0; x < width; x++) {
-                    opaque[y * width + x] = (sprite.getPixelRGBA(0, x, y) >>> 24) >= 26;
-                }
-            }
-            return (u, v) -> opaque[Mth.clamp((int) Math.floor(v * height), 0, height - 1) * width
-                    + Mth.clamp((int) Math.floor(u * width), 0, width - 1)];
-        }
     }
 }

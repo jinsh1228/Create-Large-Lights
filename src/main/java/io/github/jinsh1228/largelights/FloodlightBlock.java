@@ -184,7 +184,7 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
         public float pitch = 90;
         /** Unlinked: which of its kind's beam widths (FloodlightKind.spread); -1 for the kind's default. */
         public int spread = -1;
-        /** The light blocks it placed (RealLight). */
+        /** Ownership of old light blocks, retained until migration removes them. */
         final RealLight.Placed placed = new RealLight.Placed();
         /** The renderer's state for this floodlight (client only): its traced beam and its eased aim. */
         public Object renderTrace;
@@ -192,6 +192,23 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
 
         public Entity(BlockPos pos, BlockState state) {
             super(CreateLargeLights.FLOODLIGHT_ENTITY.get(), pos, state);
+        }
+
+        @Override
+        public void onLoad() {
+            super.onLoad();
+            if (level != null && !level.isClientSide) {
+                // NeoForge calls this after insertion, even when this chunk is outside simulation distance.
+                RealLight.refresh(level, worldPosition, this);
+            }
+        }
+
+        @Override
+        public void setRemoved() {
+            if (level != null) {
+                LightField.remove(level, worldPosition);
+            }
+            super.setRemoved();
         }
 
         public FloodlightKind kind() {
@@ -260,7 +277,7 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
             return owner.controller() == owner && owner.fixtures.contains(worldPosition) ? owner : null;
         }
 
-        /** The light blocks it keeps in the world, as BlockPos.asLong. */
+        /** Legacy light blocks awaiting migration, as BlockPos.asLong. */
         public long[] lightBlocks() {
             return placed.toArray();
         }
@@ -295,8 +312,7 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
                     LightingText.number(Math.floorMod(Math.round(beam.yaw() + 180), 360) + "°"),
                     LightingText.number(Math.round(-beam.pitch()) + "°")).withColor(LightingText.TEXT));
             tooltip.add(Component.translatable("create_large_lights.tooltip.real_light",
-                    LightingText.number(Math.min(RealLight.lightLevel(beam.strength()), beam.lightLimit())),
-                    LightingText.number(placed.size())).withColor(LightingText.TEXT));
+                    LightingText.number(RealLight.lightLevel(beam.strength() * beam.lightLimit() / 15f))).withColor(LightingText.TEXT));
             return true;
         }
 
@@ -306,7 +322,9 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
             tag.putFloat("AimYaw", yaw);
             tag.putFloat("AimPitch", pitch);
             tag.putInt("Spread", spread);
-            tag.putLongArray("LightBlocks", placed.toArray());
+            if (placed.size() > 0) {
+                tag.putLongArray("LightBlocks", placed.toArray());
+            }
         }
 
         @Override
