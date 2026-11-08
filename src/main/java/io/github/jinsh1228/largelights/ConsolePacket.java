@@ -49,7 +49,7 @@ public record ConsolePacket(BlockPos console, int group, Action action, int inde
 
     private static void handle(ConsolePacket packet, IPayloadContext context) {
         Player player = context.player();
-        if (!packet.valid()) {
+        if (player.isSpectator() || !packet.valid()) {
             return;
         }
         LightingConsoleBlock.Entity part = Reach.blockEntity(player, packet.console, Reach.HAND,

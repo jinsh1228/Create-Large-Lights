@@ -135,6 +135,16 @@ CMSはGitHubのリリースにあるjar（`gradle.properties` の `cms_version`�
 ./gradlew -Pdemo runClient
 ```
 
+鉄格子・フェンス・上下ハーフブロック・階段への描画を確認する専用シーン:
+
+```bash
+./gradlew -PshapeDemo runClient
+```
+
+補助の環境光を置かず、青色の投光器だけで各形状を比較し、実モデルへの照射・透過判定と光源の配置範囲をログの
+`SHAPE CHECK PASS/FAIL` で確認します。描画用の遮光判定はモデルの面とテクスチャの透明部分を使うため、
+鉄格子やフェンスの当たり判定が、見えている面や隙間を余分に遮りません。
+
 
 ## ライセンス
 

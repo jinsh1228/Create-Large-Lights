@@ -1,5 +1,8 @@
 package io.github.jinsh1228.largelights;
 
+import java.util.function.LongConsumer;
+import java.util.function.LongPredicate;
+import java.util.function.Predicate;
 
 import org.haruyq.createmediasystems.SableCompat;
 
@@ -10,19 +13,29 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
+import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.LightBlock;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.level.material.Fluids;
+import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.CollisionContext;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.event.tick.LevelTickEvent;
 
 /**
  * The light a floodlight casts into the world itself: invisible light blocks (minecraft:light) in the air just off
@@ -30,6 +43,7 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * (Entity.lights) and takes them away when its beam moves off them, goes out, or the floodlight is broken. It never
  * replaces anything but air or still water, and never takes away a light block it didn't place.
  */
+@EventBusSubscriber(modid = CreateLargeLights.MOD_ID)
 public final class RealLight {
     /** Ticks between looks at whether the beam changed (spread over lights by position). */
     static final int CHECK = 10;
@@ -62,6 +76,11 @@ public final class RealLight {
             for (long packed : saved) {
                 lights.add(packed);
             }
+            updated = Long.MIN_VALUE;
+        }
+
+        boolean needsUpdate(int signature, long now) {
+            return updated == Long.MIN_VALUE || signature != this.signature || now < updated || now - updated >= REFRESH;
         }
     }
 
@@ -71,15 +90,24 @@ public final class RealLight {
      * it falls on, at light level {@code brightness}.
      */
     record Cast(Vec3 from, Vec3 forward, Vec3 right, Vec3 up, double tangent, double range, int radius, int brightness) {
-        /** Aimed by yaw and pitch (Aim), from just outside the block at {@code pos}. */
-        static Cast aimed(BlockPos pos, float yaw, float pitch, float spread, double range, int radius, int brightness) {
+        /** Aimed by yaw and pitch (Aim), from near the lens at {@code pos}. The trace ignores the fixture itself. */
+        static Cast aimed(BlockPos pos, float yaw, float pitch, float spread, double range, FloodlightKind kind, int brightness) {
             var head = Aim.head(yaw, pitch);
             org.joml.Vector3f f = head.transformDirection(new org.joml.Vector3f(0, 0, 1)).normalize();
             org.joml.Vector3f r = head.transformDirection(new org.joml.Vector3f(1, 0, 0)).normalize();
             org.joml.Vector3f u = head.transformDirection(new org.joml.Vector3f(0, 1, 0)).normalize();
             Vec3 forward = new Vec3(f.x, f.y, f.z);
-            return new Cast(Vec3.atCenterOf(pos).add(forward), forward, new Vec3(r.x, r.y, r.z), new Vec3(u.x, u.y, u.z),
-                    Math.tan(Math.toRadians(spread) / 2), range, radius, brightness);
+            return new Cast(Vec3.atCenterOf(pos).add(forward.scale(kind.lensZ + 0.01)), forward,
+                    new Vec3(r.x, r.y, r.z), new Vec3(u.x, u.y, u.z),
+                    Math.tan(Math.toRadians(spread) / 2), range, kind.radius, brightness);
+        }
+
+        /** A light source's centre must be inside the same cone and range as the surface shader. */
+        boolean contains(BlockPos pos) {
+            double x = pos.getX() + 0.5 - from.x, y = pos.getY() + 0.5 - from.y, z = pos.getZ() + 0.5 - from.z;
+            double along = x * forward.x + y * forward.y + z * forward.z;
+            double radius = Math.max(0.08, along * tangent);
+            return along > 0 && along < range && x * x + y * y + z * z - along * along < radius * radius;
         }
     }
 
@@ -129,7 +157,7 @@ public final class RealLight {
      */
     static boolean update(Level level, BlockPos pos, Placed placed, int signature, java.util.function.Supplier<Cast> cast) {
         long now = level.getGameTime();
-        if (signature == placed.signature && now - placed.updated < REFRESH) {
+        if (!placed.needsUpdate(signature, now)) {
             return false;
         }
         placed.signature = signature;
@@ -163,7 +191,7 @@ public final class RealLight {
         // The aim with the console's pan and tilt; a group's motion moves the beam, not the light blocks.
         int signature = signature(brightness, beam.yaw(), beam.pitch(), beam.spread(), beam.range());
         if (update(level, pos, light.placed, signature, () -> Cast.aimed(pos, beam.yaw(), beam.pitch(), beam.spread(),
-                beam.range(), light.kind().radius, brightness))) {
+                beam.range(), light.kind(), brightness))) {
             light.changed();
         }
     }
@@ -186,43 +214,116 @@ public final class RealLight {
         Vec3 forward = cast.forward();
         double tangent = cast.tangent();
         double range = cast.range();
-        BlockHitResult middle = clip(level, from, from.add(forward.scale(range)));
+        BlockGetter blocks = new TraceBlocks(level, level::isLoaded, pos);
+        BlockHitResult middle = clip(blocks, from, from.add(forward.scale(range)));
         double distance = middle.getType() == HitResult.Type.BLOCK ? middle.getLocation().distanceTo(from) : range;
         double radius = Math.min(distance * tangent, cast.radius());
-        // cell → position: the first sample to land in a cell has it.
+        double sampledTangent = middle.getType() == HitResult.Type.BLOCK
+                ? sampleTangent(tangent, distance, cast.radius()) : tangent;
+        // cell → position: keep the sample nearest the cell's middle, with ties toward the beam's middle.
         Long2LongOpenHashMap wanted = new Long2LongOpenHashMap();
         double[] disk = disk(grid(radius, spacing));
-        for (int i = 0; i < disk.length && wanted.size() < max; i += 2) {
+        for (int i = 0; i < disk.length; i += 2) {
             BlockHitResult hit;
             if (i == 0) {
                 hit = middle;
             } else {
-                double u = disk[i] * tangent;
-                double v = disk[i + 1] * tangent;
+                double u = disk[i] * sampledTangent;
+                double v = disk[i + 1] * sampledTangent;
                 double x = forward.x + cast.right().x * u + cast.up().x * v;
                 double y = forward.y + cast.right().y * u + cast.up().y * v;
                 double z = forward.z + cast.right().z * u + cast.up().z * v;
                 double scale = range / Math.sqrt(x * x + y * y + z * z);
-                hit = clip(level, from, from.add(x * scale, y * scale, z * scale));
+                hit = clip(blocks, from, from.add(x * scale, y * scale, z * scale));
             }
-            if (hit.getType() != HitResult.Type.BLOCK) {
+            if (hit.getType() != HitResult.Type.BLOCK
+                    || middle.getType() == HitResult.Type.BLOCK
+                    && hit.getLocation().distanceToSqr(middle.getLocation()) > (double) cast.radius() * cast.radius()) {
                 continue;
             }
             BlockPos at = hit.getBlockPos().relative(hit.getDirection());
-            if (at.equals(pos) || !level.isLoaded(at)) {
+            if (at.equals(pos) || !cast.contains(at) || !level.isLoaded(at)) {
                 continue;
             }
-            long cell = BlockPos.asLong(Math.floorDiv(at.getX(), spacing), Math.floorDiv(at.getY(), spacing),
-                    Math.floorDiv(at.getZ(), spacing));
-            if (!wanted.containsKey(cell) && placeable(level.getBlockState(at), placed.lights.contains(at.asLong()))) {
-                wanted.put(cell, at.asLong());
+            if (placeable(level.getBlockState(at), placed.lights.contains(at.asLong()))) {
+                sample(wanted, at, spacing, middle.getLocation(), max);
             }
         }
         return wanted;
     }
 
-    private static BlockHitResult clip(Level level, Vec3 from, Vec3 to) {
-        return level.clip(new ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE,
+    /** A disk edge must not claim a cell's far corner and discard its later samples nearer the middle. */
+    static void sample(Long2LongOpenHashMap wanted, BlockPos at, int spacing, Vec3 center, int max) {
+        long cell = BlockPos.asLong(Math.floorDiv(at.getX(), spacing), Math.floorDiv(at.getY(), spacing),
+                Math.floorDiv(at.getZ(), spacing));
+        if (!wanted.containsKey(cell)) {
+            if (wanted.size() < max) {
+                wanted.put(cell, at.asLong());
+            }
+            return;
+        }
+        BlockPos previous = BlockPos.of(wanted.get(cell));
+        double distance = cellDistance(at, spacing);
+        double before = cellDistance(previous, spacing);
+        if (distance < before || distance == before && at.distToCenterSqr(center) < previous.distToCenterSqr(center)) {
+            wanted.put(cell, at.asLong());
+        }
+    }
+
+    private static double cellDistance(BlockPos at, int spacing) {
+        double middle = (spacing - 1) * 0.5;
+        double x = Math.floorMod(at.getX(), spacing) - middle;
+        double y = Math.floorMod(at.getY(), spacing) - middle;
+        double z = Math.floorMod(at.getZ(), spacing) - middle;
+        return x * x + y * y + z * z;
+    }
+
+    /** The sampling cone fits the footprint's radius, even when a distant surface makes the full beam wider. */
+    static double sampleTangent(double tangent, double distance, int radius) {
+        return distance > 0 ? Math.min(tangent, radius / distance) : tangent;
+    }
+
+    /** A trace must not load distant chunks, or collide with the fixture's approximate block shape. */
+    record TraceBlocks(BlockGetter blocks, Predicate<BlockPos> loaded, BlockPos fixture) implements BlockGetter {
+        @Override
+        public BlockState getBlockState(BlockPos pos) {
+            if (pos.equals(fixture)) {
+                return Blocks.AIR.defaultBlockState();
+            }
+            // Stop at unknown terrain instead of letting the ray pass through it into another loaded chunk.
+            return loaded.test(pos) ? blocks.getBlockState(pos) : Blocks.BARRIER.defaultBlockState();
+        }
+
+        @Override
+        public BlockHitResult clip(ClipContext context) {
+            BlockHitResult hit = BlockGetter.super.clip(context);
+            return loaded.test(hit.getBlockPos()) ? hit
+                    : BlockHitResult.miss(hit.getLocation(), hit.getDirection(), hit.getBlockPos());
+        }
+
+        @Override
+        public FluidState getFluidState(BlockPos pos) {
+            return getBlockState(pos).getFluidState();
+        }
+
+        @Override
+        public BlockEntity getBlockEntity(BlockPos pos) {
+            return pos.equals(fixture) || !loaded.test(pos) ? null : blocks.getBlockEntity(pos);
+        }
+
+        @Override
+        public int getHeight() {
+            return blocks.getHeight();
+        }
+
+        @Override
+        public int getMinBuildHeight() {
+            return blocks.getMinBuildHeight();
+        }
+    }
+
+    private static BlockHitResult clip(BlockGetter blocks, Vec3 from, Vec3 to) {
+        return blocks.clip(new ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE,
                 CollisionContext.empty()));
     }
 
@@ -275,13 +376,73 @@ public final class RealLight {
 
     /** Takes away every light block {@code placed} holds, as its light is broken. */
     static void clear(Level level, Placed placed) {
+        clear(placed, packed -> level.isLoaded(BlockPos.of(packed)), packed -> remove(level, BlockPos.of(packed)),
+                packed -> {
+                    if (level instanceof ServerLevel server) {
+                        server.getDataStorage().computeIfAbsent(Pending.FACTORY, Pending.NAME).add(packed);
+                    }
+                });
+    }
+
+    static void clear(Placed placed, LongPredicate loaded, LongConsumer remove, LongConsumer defer) {
         for (long packed : placed.lights) {
-            BlockPos at = BlockPos.of(packed);
-            if (level.isLoaded(at)) {
-                remove(level, at);
+            if (loaded.test(packed)) {
+                remove.accept(packed);
+            } else {
+                // The fixture is going away; its block entity cannot remember this position any longer.
+                defer.accept(packed);
             }
         }
         placed.lights.clear();
+    }
+
+    /** Removed fixtures' unloaded light blocks, saved with the dimension until their chunks return. */
+    static final class Pending extends SavedData {
+        static final String NAME = "create_large_lights_light_cleanup";
+        static final Factory<Pending> FACTORY = new Factory<>(Pending::new, Pending::load);
+        final LongSet lights = new LongOpenHashSet();
+
+        void add(long packed) {
+            if (lights.add(packed)) {
+                setDirty();
+            }
+        }
+
+        void removeLoaded(LongPredicate loaded, LongConsumer remove) {
+            for (LongIterator it = lights.iterator(); it.hasNext(); ) {
+                long packed = it.nextLong();
+                if (loaded.test(packed)) {
+                    remove.accept(packed);
+                    it.remove();
+                    setDirty();
+                }
+            }
+        }
+
+        static Pending load(CompoundTag tag, HolderLookup.Provider registries) {
+            Pending pending = new Pending();
+            for (long packed : tag.getLongArray("LightBlocks")) {
+                pending.lights.add(packed);
+            }
+            return pending;
+        }
+
+        @Override
+        public CompoundTag save(CompoundTag tag, HolderLookup.Provider registries) {
+            tag.putLongArray("LightBlocks", lights.toLongArray());
+            return tag;
+        }
+    }
+
+    @SubscribeEvent
+    public static void cleanup(LevelTickEvent.Post event) {
+        if (event.getLevel() instanceof ServerLevel level && Math.floorMod(level.getGameTime(), CHECK) == 0) {
+            Pending pending = level.getDataStorage().get(Pending.FACTORY, Pending.NAME);
+            if (pending != null) {
+                pending.removeLoaded(packed -> level.isLoaded(BlockPos.of(packed)),
+                        packed -> remove(level, BlockPos.of(packed)));
+            }
+        }
     }
 
     private static void remove(Level level, BlockPos at) {

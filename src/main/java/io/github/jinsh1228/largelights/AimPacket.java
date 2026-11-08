@@ -37,6 +37,9 @@ public record AimPacket(BlockPos light, Vec3 target) implements CustomPacketPayl
 
     private static void handle(AimPacket packet, IPayloadContext context) {
         Player player = context.player();
+        if (player.isSpectator()) {
+            return;
+        }
         var level = player.level();
         if (!level.isLoaded(packet.light) || !(level.getBlockEntity(packet.light) instanceof FloodlightBlock.Entity light)) {
             return;

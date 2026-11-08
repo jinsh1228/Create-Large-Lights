@@ -79,6 +79,16 @@ if (providers.gradleProperty('demo').isPresent()) {
     }
 }
 
+// Focused rendering regression scene for non-cubic blocks: -PshapeDemo runClient.
+if (providers.gradleProperty('shapeDemo').isPresent()) {
+    sourceSets.main.java.srcDir('src/shapeDemo/java')
+    neoForge.runs.client {
+        gameDirectory = file('run-shapes')
+        systemProperty 'createLargeLights.shapeDemo', 'true'
+        programArguments.addAll('--width', '1280', '--height', '720')
+    }
+}
+
 configurations {
     runtimeClasspath.extendsFrom localRuntime
 }

@@ -144,7 +144,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         Matrix4f local = Aim.head(aim[0], aim[1]);
         Matrix4f head = new Matrix4f(model).mul(local);
 
-        float lensZ = stadium ? 0.1f : 0.15f;
+        float lensZ = kind.lensZ;
         float[] normals = new float[18];
         VertexConsumer frame = buffers.getBuffer(FRAME);
         boxes(frame, mount, normals(mount, normals), stadium ? STADIUM_MOUNT : FLOODLIGHT_MOUNT, light);
@@ -198,7 +198,9 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         Trace trace = (Trace) lamp.renderTrace;
         trace.update(lamp, rays, origin, direction, right, up, Math.tan(halfAngle), beam.range());
         MultiBufferSource effects = LightingRenderer.beamBuffers(level, buffers);
-        LightingIllumination.render(lamp, origin, direction, halfAngle, beam.range(), strength * overlay(kind), color,
+        boolean realLight = FloodlightConfig.SPEC.isLoaded() && FloodlightConfig.REAL_LIGHT.get();
+        LightingIllumination.render(lamp, origin, direction, halfAngle, beam.range(),
+                strength * overlay(kind, realLight, beam.lightLimit()), color,
                 trace.center,
                 rays, model, effects, kind.radius);
         // The camera is at the frame's origin: the pose's translation is how far off the floodlight is.
@@ -254,13 +256,12 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
      * How strongly the beam is laid over what it falls on. With real light (RealLight; the server's config reaches
      * the client) the world is already lit there, so the overlay only shows the beam's colour and shape.
      */
-    private static float overlay(FloodlightKind kind) {
-        boolean real = FloodlightConfig.SPEC.isLoaded() && FloodlightConfig.REAL_LIGHT.get();
-        return kind.intensity * (real ? REAL_LIGHT_OVERLAY : 1);
+    static float overlay(FloodlightKind kind, boolean real, int lightLimit) {
+        return kind.intensity * (real && lightLimit > 0 ? REAL_LIGHT_OVERLAY : 1);
     }
 
     /** Where the beam's middle and edges meet blocks, traced again only when something that matters changed. */
-    private static final class Trace {
+    static final class Trace {
         LightingRaycast.Hit center;
         /** Each edge's unit direction, x, y, z. */
         final double[] edges = new double[EDGES * 3];
@@ -271,6 +272,12 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         Vec3 lastOrigin;
         Vec3 lastDirection;
         double lastTangent;
+        float lastRange;
+
+        boolean sameBeam(Vec3 from, Vec3 origin, Vec3 direction, double tangent, float range) {
+            return from.equals(lastFrom) && origin.equals(lastOrigin) && direction.equals(lastDirection)
+                    && tangent == lastTangent && range == lastRange;
+        }
 
         void update(FloodlightBlock.Entity lamp, LightingRaycast rays, Vec3 origin, Vec3 direction, Vec3 right,
                     Vec3 up, double tangent, float range) {
@@ -280,8 +287,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
             Vec3 from = SableCompat.toRenderWorld(level, lamp.getBlockPos(), origin.add(anchor));
             // Off the world (a Ponder scene), every frame; in it, again when a block changes or the light moves.
             boolean still = center != null && frame - traced <= 1 && level == Minecraft.getInstance().level
-                    && !LightingIllumination.blocksChanged() && from.equals(lastFrom)
-                    && origin.equals(lastOrigin) && direction.equals(lastDirection) && tangent == lastTangent;
+                    && !LightingIllumination.blocksChanged() && sameBeam(from, origin, direction, tangent, range);
             traced = frame;
             if (still) {
                 return;
@@ -290,6 +296,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
             lastOrigin = origin;
             lastDirection = direction;
             lastTangent = tangent;
+            lastRange = range;
             center = rays.clip(from, SableCompat.toRenderWorld(level, lamp.getBlockPos(),
                     origin.add(direction.scale(range)).add(anchor)));
             for (int i = 0; i < EDGES; i++) {

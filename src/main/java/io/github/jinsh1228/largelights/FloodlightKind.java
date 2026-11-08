@@ -6,8 +6,8 @@ package io.github.jinsh1228.largelights;
  * is laid (LightingIllumination.render's maxRadius; RealLight's too).
  */
 public enum FloodlightKind {
-    FLOODLIGHT(new float[]{20, 35, 50, 70}, 1, 128, 24, 0.3f, 9),
-    STADIUM_LIGHT(new float[]{25, 40, 60, 80}, 2, 256, 48, 0.4f, 12);
+    FLOODLIGHT(new float[]{20, 35, 50, 70}, 1, 128, 24, 0.3f, 9, 0.15f),
+    STADIUM_LIGHT(new float[]{25, 40, 60, 80}, 2, 256, 48, 0.4f, 12, 0.1f);
 
     final float[] spreads;
     final int defaultSpread;
@@ -20,14 +20,17 @@ public enum FloodlightKind {
     public final float intensity;
     /** How strongly the beam shows in the air, out of 255 at full strength. */
     public final float haze;
+    /** Lens position along the head's local +Z, shared by rendering and real-light placement. */
+    public final float lensZ;
 
-    FloodlightKind(float[] spreads, int defaultSpread, float range, int radius, float intensity, float haze) {
+    FloodlightKind(float[] spreads, int defaultSpread, float range, int radius, float intensity, float haze, float lensZ) {
         this.spreads = spreads;
         this.defaultSpread = defaultSpread;
         this.range = range;
         this.radius = radius;
         this.intensity = intensity;
         this.haze = haze;
+        this.lensZ = lensZ;
     }
 
     public int spreads() {

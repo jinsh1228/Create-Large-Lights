@@ -159,8 +159,17 @@ public final class FloodlightPage implements LightingConsolePage {
         return 3.5f + Mth.clamp(pan / 180, -1, 1) * 0.4f;
     }
 
-    private static float aimZ(float tilt) {
-        return 0.625f + Mth.clamp((tilt - Aim.NEUTRAL_TILT) / 85, -1, 1) * 0.475f;
+    static float aimZ(float tilt) {
+        float offset = tilt - Aim.NEUTRAL_TILT;
+        float span = offset < 0 ? Aim.NEUTRAL_TILT + 85 : 85 - Aim.NEUTRAL_TILT;
+        return 0.625f + Mth.clamp(offset / span, -1, 1) * 0.475f;
+    }
+
+    /** The tilt at a pad position: neutral in the centre, with the full -85 to 85 range at its edges. */
+    static float aimTilt(double z) {
+        double offset = Mth.clamp((z - 0.625) / 0.475, -1, 1);
+        float span = offset < 0 ? Aim.NEUTRAL_TILT + 85 : 85 - Aim.NEUTRAL_TILT;
+        return (float) (Aim.NEUTRAL_TILT + offset * span);
     }
 
     @Override
@@ -415,7 +424,7 @@ public final class FloodlightPage implements LightingConsolePage {
                     LightingText.number(signed(group.tilt - Aim.NEUTRAL_TILT) + "°")))
                     .onDrag(at -> LightingConsolePage.send(console, LightingPackets.Control.AIM, g, 0,
                             (float) Mth.clamp((at.x - 3.5) / 0.4 * 180, -180, 180),
-                            (float) Mth.clamp(Aim.NEUTRAL_TILT + (at.z - 0.625) / 0.475 * 85, -85, 85)))
+                            aimTilt(at.z)))
                     // Sneak-use puts it back where each floodlight was aimed.
                     .onPress(shift -> {
                         if (shift) {

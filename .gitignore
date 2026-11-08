@@ -8,4 +8,5 @@ out/
 libs/
 /logs/
 run-demo/
+run-shapes/
 dist/
