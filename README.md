@@ -134,14 +134,14 @@ GPU機能が使えない環境、Irisのシェーダーパック使用中、光�
 
 ## ビルド
 
-CMSは既定で公式リリース1.2.1のjar（`gradle.properties` の `cms_version`）を自動で取得して使います。対応範囲は1.2.0以降です。
+CMSは既定で公式リリース1.2.2のjar（`gradle.properties` の `cms_version`）を自動で取得して使います。対応範囲は1.2.0以降です。
 
 ```bash
 ./gradlew build
 ```
 
-CMSの[606122bf](https://github.com/haruyq/Create-Media-Systems/commit/606122bfcd2b339d056eaa246eda6ffb779543af)は公開1.2.1（tag `v1.2.1`、commit `c09f40e`）より後のソースです。
-同じ1.2.1表記でも、その後の描画修正・リファクタリングは公開jarには含まれません。ソース版を使う場合は、その場所を指定します。
+CMS 1.2.2には、以前ソース版で確認した描画修正・API整理が含まれます。
+未リリースの変更に対してビルドする場合は、CMSのソースの場所を指定します。
 
 ```bash
 ./gradlew build -PcmsPath=../Create-Media-Systems

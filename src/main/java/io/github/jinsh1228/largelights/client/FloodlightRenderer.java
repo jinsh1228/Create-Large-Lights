@@ -216,7 +216,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
                 distanceSqr < NEAR * NEAR ? STEPS : STEPS / 2);
     }
 
-    /** CMS moved this clock in the source refactor; released jars retain the original package. */
+    /** CMS moved this clock in 1.2.2; 1.2.0 and 1.2.1 retain the original package. */
     private static MethodHandle analysisClock() {
         ReflectiveOperationException missing = null;
         for (String namespace : new String[]{"lighting", "playback"}) {
