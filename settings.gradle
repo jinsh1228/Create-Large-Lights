@@ -10,13 +10,29 @@ plugins {
 
 rootProject.name = 'CreateLargeLights'
 
-// Create: Media Systems comes as its released jar (build.gradle). To build against its source instead (a change
-// to CMS not yet released), give its folder: -PcmsPath=../Create-Media-Systems
-def cmsPath = providers.gradleProperty('cmsPath')
-if (cmsPath.isPresent()) {
-    includeBuild(cmsPath.get()) {
-        dependencySubstitution {
-            substitute module('org.haruyq:create_media_systems') using project(':')
-        }
+def cmsDirectory = file(providers.gradleProperty('cmsPath').getOrElse('../Create-Media-Systems'))
+def cmsRevision = providers.gradleProperty('cms_revision').get()
+def cmsSetup = "git clone https://github.com/haruyq/Create-Media-Systems.git \"${cmsDirectory}\"\n" +
+        "git -C \"${cmsDirectory}\" checkout ${cmsRevision}\nUse -PcmsPath=... for another checkout."
+if (!cmsDirectory.isDirectory()) {
+    throw new GradleException("CMS source checkout is required at ${cmsDirectory}.\n${cmsSetup}")
+}
+String cmsHead
+try {
+    cmsHead = providers.exec {
+        workingDir cmsDirectory
+        commandLine 'git', 'rev-parse', 'HEAD'
+    }.standardOutput.asText.get().trim()
+} catch (Exception error) {
+    throw new GradleException("Cannot read the CMS source commit at ${cmsDirectory}.\n${cmsSetup}", error)
+}
+if (cmsHead != cmsRevision) {
+    throw new GradleException("CMS source is at ${cmsHead}; expected ${cmsRevision}.\n" +
+            "git -C \"${cmsDirectory}\" fetch origin\n" +
+            "git -C \"${cmsDirectory}\" checkout ${cmsRevision}")
+}
+includeBuild(cmsDirectory) {
+    dependencySubstitution {
+        substitute module('org.haruyq:create_media_systems') using project(':')
     }
 }

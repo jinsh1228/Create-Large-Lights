@@ -134,17 +134,21 @@ GPU機能が使えない環境、Irisのシェーダーパック使用中、光�
 
 ## ビルド
 
-CMSは既定で公式リリース1.2.2のjar（`gradle.properties` の `cms_version`）を自動で取得して使います。対応範囲は1.2.0以降です。
+CMSは`gradle.properties`の`cms_revision`で指定したコミットのソースからビルドします。
+既定の場所は隣の`../Create-Media-Systems`です。初回は次のように準備します。
 
 ```bash
+git clone https://github.com/haruyq/Create-Media-Systems.git ../Create-Media-Systems
+git -C ../Create-Media-Systems checkout 337c1520188f97aee076fd2a9913d3d9478c3bc9
 ./gradlew build
 ```
 
-CMS 1.2.2には、以前ソース版で確認した描画修正・API整理が含まれます。
-未リリースの変更に対してビルドする場合は、CMSのソースの場所を指定します。
+既存のcheckoutを使う場合は、fetch後に指定コミットへ合わせます。
+通常ビルドでもこのコミットを使い、CMSのHEADが一致しなければ停止します。使用したコミットはJARの`CMS-Commit`にも記録します。
+別の場所のcheckoutは`cmsPath`で指定できます。
 
 ```bash
-./gradlew build -PcmsPath=../Create-Media-Systems
+./gradlew build -PcmsPath=/path/to/Create-Media-Systems
 ```
 
 CLL独自のGPU描画と実照度は引き続き使用します。CMSの表面描画へ戻る場面では、使用するCMS版の描画上の制約も受けます。
@@ -178,7 +182,7 @@ CPU描画と本番GPU描画の比較用シーン（デモ用コードは通常�
 全灯の位置・色・明るさ・照射角・射程の一致を検証し、実光量をOFFにして表面投影だけを測定します。
 `gpuMode=gpu` は比較用の旧GPU試作です。この試作だけは `-PshadowSize=1024` などで影の解像度を変更できます。
 `gpuMode=cms` は比較用にCLLのraycast・surface model・ModelData通知の3Mixinを除外し、CMS本来の表面描画を使います。
-`-PcmsPath=../Create-Media-Systems` を併用して、ソース版と公開版を比較できます。
+異なるCMSコミットを比較する場合は、対応するcheckoutと`-Pcms_revision=<コミット>`を揃えて指定します。
 
 本番GPU経路のフェード・色・遮蔽物・向きの更新、資源の再読込と解放を検証するデモ:
 
