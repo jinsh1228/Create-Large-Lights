@@ -141,7 +141,7 @@ CMSは`gradle.properties`の`cms_revision`で指定したコミットのソー�
 
 ```bash
 git clone https://github.com/haruyq/Create-Media-Systems.git ../Create-Media-Systems
-git -C ../Create-Media-Systems checkout e64946b74a524938d4201c9aee4f841821b6fb92
+git -C ../Create-Media-Systems checkout fff1ae687170993c751312bacaa27ffaae1ee99f
 ./gradlew build
 ```
 
