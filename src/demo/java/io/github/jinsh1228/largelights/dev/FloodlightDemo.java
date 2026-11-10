@@ -299,9 +299,9 @@ public final class FloodlightDemo {
         group.colors[0] = 0xFF3040;
         group.colorCycle = false;
         group.audio = false;
-        // Turned 90° right of its aim (straight down, so it faces west) and 30° up from it.
-        group.pan = 90;
-        group.tilt = Aim.NEUTRAL_TILT - 30;
+        // Ceiling controls tilt the head 30° toward its own right, here west.
+        group.pan = 30;
+        group.tilt = Aim.NEUTRAL_TILT;
         console.changed();
     }
 
@@ -514,9 +514,32 @@ public final class FloodlightDemo {
         check(LightField.sample(level, new BlockPos(-15, FLOOR + 1, 0)) > 0
                         && LightField.sample(level, new BlockPos(15, FLOOR + 1, 0)) == 0,
                 "the linked field illuminates the west target and stays zero outside the cone");
+        var group = beam.group();
+        group.pan = -30;
+        check(Math.abs(center.beam().yaw() + 90) < 1e-3 && Math.abs(center.beam().pitch() - 60) < 1e-3,
+                "ceiling pan reaches the opposite side of straight down");
+        group.pan = 0;
+        group.tilt = Aim.NEUTRAL_TILT + 30;
+        check(Math.abs(center.beam().pitch() - 60) < 1e-3 && Math.abs(Math.abs(center.beam().yaw()) - 180) < 1e-3,
+                "ceiling tilt crosses straight down without clamping");
+        var mounted = center.getBlockState();
+        float baseYaw = center.yaw, basePitch = center.pitch;
+        level.setBlock(CENTER_LIGHT, mounted.setValue(FloodlightBlock.FACING, Direction.NORTH), Block.UPDATE_ALL);
+        center.aim(180, 35);
+        group.pan = 20;
+        group.tilt = 55;
+        check(Math.abs(center.beam().yaw() + 160) < 1e-3 && Math.abs(center.beam().pitch() - 55) < 1e-3,
+                "wall mounting retains its previous pan and tilt controls");
+        level.setBlock(CENTER_LIGHT, mounted, Block.UPDATE_ALL);
+        center.aim(baseYaw, basePitch);
+        group.pan = 30;
+        group.tilt = Aim.NEUTRAL_TILT;
+        beam.console().changed();
         float spread = center.beam().spread();
         wrench(level, CENTER_LIGHT);
         check(center.beam().spread() == spread, "the wrench leaves a linked floodlight's beam width to the console");
+        check(Math.abs(center.beam().yaw() - beam.yaw()) < 1e-3 && Math.abs(center.beam().pitch() - beam.pitch()) < 1e-3,
+                "beam width controls do not change the fixture aim");
         check(center.beam().strength() > 0, "a linked floodlight ignores redstone");
         checkFamilies(level);
         view(server, new Vec3(-14.5, FLOOR + 14, -14.5), new Vec3(0.5, FLOOR, 0.5));

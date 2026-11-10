@@ -30,6 +30,12 @@ public final class Aim {
                 .rotateX((float) Math.toRadians(pitch));
     }
 
+    /** Ceiling controls tilt about the fixture's own axes, including across its straight-down aim. */
+    public static Matrix4f relativeHead(float yaw, float pitch, float pan, float tilt) {
+        return head(yaw, pitch).rotateY((float) Math.toRadians(-pan))
+                .rotateX((float) Math.toRadians(tilt - NEUTRAL_TILT));
+    }
+
     public static Vec3 direction(float yaw, float pitch) {
         Vector3f forward = head(yaw, pitch).transformDirection(new Vector3f(0, 0, 1));
         return new Vec3(forward.x, forward.y, forward.z).normalize();
@@ -43,12 +49,34 @@ public final class Aim {
         return new float[]{Mth.wrapDegrees(yaw + pan), Mth.clamp(pitch + tilt - NEUTRAL_TILT, MIN_PITCH, MAX_PITCH)};
     }
 
+    public static float[] offset(float yaw, float pitch, float pan, float tilt, boolean ceiling) {
+        if (!ceiling || pan == 0 && tilt == NEUTRAL_TILT) return offset(yaw, pitch, pan, tilt);
+        // Match relativeHead without allocating a matrix for gameplay light queries.
+        Vector3f forward = new Vector3f(0, 0, 1)
+                .rotateX((float) Math.toRadians(tilt - NEUTRAL_TILT)).rotateY((float) Math.toRadians(-pan))
+                .rotateX((float) Math.toRadians(pitch)).rotateY((float) Math.toRadians(-yaw));
+        return toward(forward.x, forward.y, forward.z, yaw);
+    }
+
+    /** A tracked direction in the same local controls as relativeHead. */
+    public static float[] relativeToward(Vec3 direction, float yaw, float pitch, float fallbackPan) {
+        Vector3f local = new Vector3f((float) direction.x, (float) direction.y, (float) direction.z)
+                .rotateY((float) Math.toRadians(yaw)).rotateX((float) Math.toRadians(-pitch));
+        float[] aim = toward(local.x, local.y, local.z, fallbackPan);
+        aim[1] += NEUTRAL_TILT;
+        return aim;
+    }
+
     /** The yaw and pitch that point along {@code direction}; straight up or down keeps {@code fallbackYaw}. */
     public static float[] toward(Vec3 direction, float fallbackYaw) {
-        double horizontal = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
+        return toward(direction.x, direction.y, direction.z, fallbackYaw);
+    }
+
+    private static float[] toward(double x, double y, double z, float fallbackYaw) {
+        double horizontal = Math.sqrt(x * x + z * z);
         float yaw = horizontal < 1e-6 ? fallbackYaw
-                : Mth.wrapDegrees((float) Math.toDegrees(Math.atan2(-direction.x, direction.z)));
-        float pitch = (float) Math.toDegrees(-Math.atan2(direction.y, horizontal));
+                : Mth.wrapDegrees((float) Math.toDegrees(Math.atan2(-x, z)));
+        float pitch = (float) Math.toDegrees(-Math.atan2(y, horizontal));
         return new float[]{yaw, Mth.clamp(pitch, MIN_PITCH, MAX_PITCH)};
     }
 }

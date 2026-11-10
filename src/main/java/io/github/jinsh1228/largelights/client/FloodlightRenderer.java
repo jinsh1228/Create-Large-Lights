@@ -144,8 +144,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         if (console != null) {
             seconds = analysisSeconds(console, seconds);
         }
-        float[] aim = aim(lamp, beam, seconds, partialTick);
-        Matrix4f local = Aim.head(aim[0], aim[1]);
+        Matrix4f local = aim(lamp, beam, seconds, partialTick);
         Matrix4f head = new Matrix4f(model).mul(local);
 
         float lensZ = kind.lensZ;
@@ -246,13 +245,15 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
      * Where the head points this frame: its aim with the console's pan and tilt (Beam), and, linked, its group's
      * motion as a stage light's (a sway, a circle, or following the target player), eased as a stage light's head.
      */
-    private static float[] aim(FloodlightBlock.Entity lamp, FloodlightBlock.Entity.Beam beam, double seconds,
-                               float partialTick) {
-        float yaw = beam.yaw();
-        float pitch = beam.pitch();
+    private static Matrix4f aim(FloodlightBlock.Entity lamp, FloodlightBlock.Entity.Beam beam, double seconds,
+                                float partialTick) {
         boolean hold = false;
         LightingConsoleBlock.Entity console = beam.console();
         LightingSettings.Group group = beam.group();
+        boolean ceiling = lamp.getBlockState().getValue(FloodlightBlock.FACING) == Direction.DOWN;
+        boolean relative = ceiling && console != null && group != null;
+        float yaw = relative ? group.pan : beam.yaw();
+        float pitch = relative ? group.tilt : beam.pitch();
         if (console != null && group != null) {
             double phase = (group.audio && console.audioSource != null ? console.motionPhase : seconds) * group.speed
                     + lamp.order * 0.35;
@@ -270,7 +271,8 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
                     Vec3 toward = SableCompat.toRenderBlockSpace(lamp.getLevel(), lamp.getBlockPos(), body)
                             .subtract(Vec3.atCenterOf(lamp.getBlockPos()));
                     if (toward.lengthSqr() > 0.25) {
-                        float[] at = Aim.toward(toward, yaw);
+                        float[] at = ceiling ? Aim.relativeToward(toward, lamp.yaw, lamp.pitch, group.pan)
+                                : Aim.toward(toward, yaw);
                         yaw = at[0];
                         pitch = at[1];
                         hold = false;
@@ -278,10 +280,18 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
                 }
             }
         }
+        if (ceiling) {
+            if (!(lamp.renderMotion instanceof AimRotation)) lamp.renderMotion = new AimRotation();
+            Matrix4f desired = relative ? Aim.relativeHead(lamp.yaw, lamp.pitch, yaw, pitch)
+                    : Aim.head(yaw, Mth.clamp(pitch, Aim.MIN_PITCH, Aim.MAX_PITCH));
+            return ((AimRotation) lamp.renderMotion).update(seconds, desired, hold);
+        }
         if (!(lamp.renderMotion instanceof AimMotion)) {
             lamp.renderMotion = new AimMotion();
         }
-        return ((AimMotion) lamp.renderMotion).update(seconds, yaw, Mth.clamp(pitch, Aim.MIN_PITCH, Aim.MAX_PITCH), hold);
+        float[] aim = ((AimMotion) lamp.renderMotion).update(seconds, yaw,
+                Mth.clamp(pitch, Aim.MIN_PITCH, Aim.MAX_PITCH), hold);
+        return Aim.head(aim[0], aim[1]);
     }
 
     /**

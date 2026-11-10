@@ -242,7 +242,8 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
             if (owner != null) {
                 LightingSettings.Group settings = owner.settings.groups[group];
                 float strength = owner.formed && owner.settings.enabled ? owner.settings.master * settings.brightness : 0;
-                float[] aim = Aim.offset(yaw, pitch, settings.pan, settings.tilt);
+                float[] aim = Aim.offset(yaw, pitch, settings.pan, settings.tilt,
+                        getBlockState().getValue(FACING) == Direction.DOWN);
                 // Beam width and real light are the floodlight page's (ConsoleSettings): a stage light's spread stops at 70°.
                 ConsoleSettings.View view = ConsoleSettings.view(owner);
                 return new Beam(owner, settings, Mth.clamp(strength, 0, 1),
