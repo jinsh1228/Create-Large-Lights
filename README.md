@@ -137,13 +137,28 @@ GPU機能が使えない環境、Irisのシェーダーパック使用中、光�
 ## ビルド
 
 CMSは`gradle.properties`の`cms_revision`で指定したコミットのソースからビルドします。
-既定の場所は隣の`../Create-Media-Systems`です。初回は次のように準備します。
+CLLのZIPにはCMSのソースは含まれないため、ビルドにはGitと、別途取得したCMSのソースが必要です。
+既定の場所は隣の`../Create-Media-Systems`です。CLLの`gradlew.bat`・`gradlew`があるフォルダーで、初回は次のように準備します。
 
 ```bash
 git clone https://github.com/haruyq/Create-Media-Systems.git ../Create-Media-Systems
 git -C ../Create-Media-Systems checkout 328f00d55328a5b482c22d5d33bd367889f13dca
-./gradlew build
 ```
+
+Windows（PowerShell）:
+
+```powershell
+.\gradlew.bat build "-PcmsPath=../Create-Media-Systems"
+```
+
+Linux・macOS:
+
+```bash
+./gradlew build -PcmsPath=../Create-Media-Systems
+```
+
+`CMS source checkout is required`は、CMSのソースが指定先にないという意味です。
+上の準備を行い、`-PcmsPath`に取得先を指定してビルドしてください。完成したJARは`build/libs/`に生成されます。
 
 既存のcheckoutを使う場合は、fetch後に指定コミットへ合わせます。
 通常ビルドでもこのコミットを使い、CMSのHEADが一致しなければ停止します。使用したコミットはJARの`CMS-Commit`にも記録します。
