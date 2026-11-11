@@ -232,7 +232,7 @@ class LightFieldTest {
     }
 
     @Test
-    void theSeventeenthLightStillContributesWhenVisibilityStorageIsFull() {
+    void moreThanSixteenLightsReuseVisibilityWhenBrightnessChanges() {
         AtomicInteger traces = new AtomicInteger();
         LightField.Field field = new LightField.Field((source, beam, target) -> {
             traces.incrementAndGet();
@@ -247,8 +247,8 @@ class LightFieldTest {
         assertEquals(17, traces.get());
         field.update(BlockPos.ZERO, weighted(dim, .02, 1));
         assertEquals(1, field.sample(target));
-        assertEquals(18, traces.get());
-        assertEquals(LightField.VISIBILITY_SOURCES, field.sections.get(SectionPos.asLong(target)).visibility.size());
+        assertEquals(17, traces.get());
+        assertEquals(17, field.sections.get(SectionPos.asLong(target)).visibility.size());
     }
 
     @Test
@@ -303,5 +303,53 @@ class LightFieldTest {
         field.update(BlockPos.ZERO, new LightField.Beam(first.origin(), first.direction(), .8, 256, 1, 6, 48));
         assertEquals(6, field.sample(point));
         assertEquals(1, traces.get());
+    }
+    @Test
+    void brightnessChangesReuseSectionCandidatesAndKeepOldSnapshotsImmutable() {
+        AtomicInteger bounds = new AtomicInteger();
+        LightField.Field field = new LightField.Field(new LightField.Visibility() {
+            public boolean visible(BlockPos source, LightField.Beam beam, BlockPos target) { return true; }
+            public double range(BlockPos source, LightField.Beam beam) { bounds.incrementAndGet(); return beam.range(); }
+        });
+        field.update(BlockPos.ZERO, beam(12));
+        BlockPos target = new BlockPos(0, 0, 8);
+        long section = SectionPos.asLong(target);
+        LightField.Snapshot original = field.snapshot(section);
+        assertEquals(12, original.sample(target));
+        int before = bounds.get();
+        field.update(BlockPos.ZERO, weighted(beam(12), .5, 12));
+        assertEquals(6, field.snapshot(section).sample(target));
+        assertEquals(before, bounds.get());
+        assertEquals(12, original.sample(target));
+        field.invalidate(new BlockPos(0, 0, 4));
+        field.snapshot(section);
+        assertTrue(bounds.get() > before);
+        field.update(BlockPos.ZERO, null);
+        assertFalse(field.affects(section));
+    }
+    @Test
+    void globalVisibilityBudgetEvictsOldMasksAndReleasesThemWithTheirSections() {
+        AtomicInteger traces = new AtomicInteger();
+        LightField.Field field = new LightField.Field((source, beam, target) -> { traces.incrementAndGet(); return true; });
+        LightField.Beam dim = weighted(beam(1), 1.0 / 1024, 1);
+        for (int i = 0; i < 128; i++) field.update(new BlockPos(i, 0, 0), dim);
+        BlockPos first = null;
+        for (int z = 24; z < 128; z += 16) for (int y = -40; y <= 40; y += 16) for (int x = -40; x <= 40; x += 16) {
+            BlockPos pos = new BlockPos(x, y, z);
+            if (dim.contribution(pos.getCenter()) <= 0) continue;
+            if (first == null) first = pos;
+            assertEquals(1, field.sample(pos));
+        }
+        assertEquals(LightField.VISIBILITY_MASKS, field.maskCount);
+        assertEquals(field.maskCount, field.sections.values().stream().mapToInt(section -> section.visibility.size()).sum());
+        int before = traces.get();
+        field.update(BlockPos.ZERO, weighted(dim, 1.0 / 2048, 1));
+        assertEquals(1, field.sample(first));
+        assertTrue(traces.get() > before); // Evicted masks are recomputed, never treated as clear or blocked.
+        field.forgetChunk(new net.minecraft.world.level.ChunkPos(first));
+        assertEquals(field.maskCount, field.sections.values().stream().mapToInt(section -> section.visibility.size()).sum());
+        field.invalidate(new BlockPos(0, 0, 8));
+        assertEquals(0, field.maskCount);
+        assertTrue(field.sections.isEmpty());
     }
 }

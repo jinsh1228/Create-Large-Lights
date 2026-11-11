@@ -64,10 +64,22 @@ public final class LightFieldNetwork {
     private static final class ServerState {
         final Long2ObjectOpenHashMap<Watch> watches = new Long2ObjectOpenHashMap<>();
         final LongLinkedOpenHashSet dirty = new LongLinkedOpenHashSet();
+        final Long2ObjectOpenHashMap<Pending> changes = new Long2ObjectOpenHashMap<>();
         Work work;
         long completed;
         long lastNanos;
         boolean queued;
+    }
+
+    private static final class Pending {
+        int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
+        boolean geometry;
+        void add(AABB bounds, boolean weightsOnly) {
+            minY = Math.min(minY, SectionPos.blockToSectionCoord((int) Math.floor(bounds.minY)));
+            maxY = Math.max(maxY, SectionPos.blockToSectionCoord((int) Math.floor(bounds.maxY)));
+            geometry |= !weightsOnly;
+        }
+        boolean contains(long section) { return SectionPos.y(section) >= minY && SectionPos.y(section) <= maxY; }
     }
 
     private static final class Work {
@@ -275,47 +287,47 @@ public final class LightFieldNetwork {
         if (state == null) {
             return;
         }
-        int minX = SectionPos.blockToSectionCoord((int) Math.floor(bounds.minX));
-        int maxX = SectionPos.blockToSectionCoord((int) Math.floor(bounds.maxX));
-        int minZ = SectionPos.blockToSectionCoord((int) Math.floor(bounds.minZ));
-        int maxZ = SectionPos.blockToSectionCoord((int) Math.floor(bounds.maxZ));
-        for (int z = minZ; z <= maxZ; z++) {
-            for (int x = minX; x <= maxX; x++) {
-                long chunk = ChunkPos.asLong(x, z);
-                Watch watch = state.watches.get(chunk);
-                if (watch != null) {
-                    boolean active = !LightField.entries(level, chunk).isEmpty();
-                    if (active != watch.active) {
-                        watch.active = active;
-                        LightFieldPacket.Hint hint = new LightFieldPacket.Hint(level.dimension().location(), chunk, active);
-                        for (ServerPlayer player : watch.players) {
-                            if (player.serverLevel() == level) {
-                                PacketDistributor.sendToPlayer(player, hint);
-                            }
-                        }
-                        if (!active) {
-                            watch.sections.clear();
-                            watch.last.clear();
-                            state.dirty.removeIf((java.util.function.LongPredicate) id -> chunk(id) == chunk);
-                            if (state.work != null && chunk(state.work.section) == chunk) {
-                                state.work = null;
-                            }
-                        }
-                    }
-                    relevant(level, chunk, watch);
-                    for (LongIterator it = watch.sections.iterator(); it.hasNext(); ) {
-                        long section = it.nextLong();
-                        if (LightField.sectionIntersects(section, bounds)) {
-                            state.dirty.add(section);
-                        }
-                    }
+        for (var entry : state.watches.long2ObjectEntrySet()) {
+            long chunk = entry.getLongKey();
+            int x = ChunkPos.getX(chunk), z = ChunkPos.getZ(chunk);
+            if (x * 16.0 > bounds.maxX || x * 16.0 + 16 < bounds.minX
+                    || z * 16.0 > bounds.maxZ || z * 16.0 + 16 < bounds.minZ) continue;
+            state.changes.computeIfAbsent(chunk, ignored -> new Pending()).add(bounds, weightsOnly);
+        }
+    }
+
+    /** All fixtures have updated before a watched chunk is reconsidered, once per tick. */
+    private static void flush(ServerLevel level, ServerState state) {
+        for (var entry : state.changes.long2ObjectEntrySet()) {
+            long chunk = entry.getLongKey();
+            Pending change = entry.getValue();
+            Watch watch = state.watches.get(chunk);
+            if (watch == null) continue;
+            boolean active = !LightField.entries(level, chunk).isEmpty();
+            if (active != watch.active) {
+                watch.active = active;
+                LightFieldPacket.Hint hint = new LightFieldPacket.Hint(level.dimension().location(), chunk, active);
+                for (ServerPlayer player : watch.players) {
+                    if (player.serverLevel() == level) PacketDistributor.sendToPlayer(player, hint);
+                }
+                if (!active) {
+                    watch.sections.clear();
+                    watch.last.clear();
+                    state.dirty.removeIf((java.util.function.LongPredicate) id -> chunk(id) == chunk);
+                    if (state.work != null && chunk(state.work.section) == chunk) state.work = null;
                 }
             }
+            relevant(level, chunk, watch);
+            for (LongIterator it = watch.sections.iterator(); it.hasNext(); ) {
+                long section = it.nextLong();
+                if (change.contains(section)) state.dirty.add(section);
+            }
+            if (change.geometry && state.work != null && chunk(state.work.section) == chunk && change.contains(state.work.section)) {
+                state.dirty.add(state.work.section);
+                state.work = null;
+            }
         }
-        if (!weightsOnly && state.work != null && LightField.sectionIntersects(state.work.section, bounds)) {
-            state.dirty.add(state.work.section);
-            state.work = null;
-        }
+        state.changes.clear();
         queue(level, state);
     }
 
@@ -371,8 +383,10 @@ public final class LightFieldNetwork {
         long start = System.nanoTime();
         long budget = Math.max(MIN_NANOS_PER_TICK, Math.min(MAX_NANOS_PER_TICK,
                 (45_000_000 - event.getServer().getAverageTickTimeNanos()) / 4));
-        for (ServerState state : servers.values()) {
-            state.lastNanos = 0;
+        for (var entry : servers.entrySet()) {
+            long passStart = System.nanoTime();
+            flush(entry.getKey(), entry.getValue());
+            entry.getValue().lastNanos = System.nanoTime() - passStart;
         }
         if (scheduled.isEmpty()) {
             return;

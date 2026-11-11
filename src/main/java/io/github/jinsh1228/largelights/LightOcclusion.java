@@ -1,14 +1,11 @@
 package io.github.jinsh1228.largelights;
 
 import java.lang.ref.WeakReference;
-import java.util.ArrayList;
-import java.util.List;
 
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
-import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
@@ -27,9 +24,6 @@ final class LightOcclusion implements LightField.Visibility {
     private final LightReach reach = new LightReach(this::full);
     private long currentKey = Long.MIN_VALUE;
     private Section current;
-    private final Long2ObjectLinkedOpenHashMap<Cell[]> tubes = new Long2ObjectLinkedOpenHashMap<>();
-    private static final Cell[] DENSE = new Cell[9];
-    private record Cell(BlockPos pos, VoxelShape shape) { }
 
     private static final class Section {
         final LevelChunkSection blocks;
@@ -110,94 +104,38 @@ final class LightOcclusion implements LightField.Visibility {
         return known;
     }
 
-    /** A one-group halo makes this a superset of vanilla's fine traversal, including edge/corner ties. */
-    private Cell[] tube(Level level, BlockPos group) {
-        long key = group.asLong();
-        Cell[] known = tubes.getAndMoveToLast(key);
-        if (known != null) return known;
-        List<Cell> cells = new ArrayList<>();
-        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-        outer: for (int gy = group.getY() - 1; gy <= group.getY() + 1; gy++) {
-            for (int gz = group.getZ() - 1; gz <= group.getZ() + 1; gz++) {
-                for (int gx = group.getX() - 1; gx <= group.getX() + 1; gx++) {
-                    pos.set(gx * 4, gy * 4, gz * 4);
-                    if (level.isOutsideBuildHeight(pos)) continue;
-                    Section section = section(level, pos);
-                    if (section == null) { known = DENSE; break outer; }
-                    classify(level, section, pos);
-                    int x0 = pos.getX() & 12, y0 = pos.getY() & 12, z0 = pos.getZ() & 12;
-                    long bit = 1L << ((x0 >> 2) | z0 | (y0 << 2));
-                    if ((section.occupied & bit) == 0) continue;
-                    for (int i = 0; i < 64; i++) {
-                        int x = x0 + (i & 3), z = z0 + (i >> 2 & 3), y = y0 + (i >> 4);
-                        int cell = y << 8 | z << 4 | x;
-                        if (((section.full[cell >> 6] | section.shaped[cell >> 6]) & 1L << cell) == 0) continue;
-                        pos.set(gx * 4 + (i & 3), gy * 4 + (i >> 4), gz * 4 + (i >> 2 & 3));
-                        VoxelShape shape = (section.full[cell >> 6] & 1L << cell) != 0 ? Shapes.block() : shape(level, section, pos, cell);
-                        if (shape.isEmpty()) continue;
-                        if (cells.size() == 8) { known = DENSE; break outer; }
-                        cells.add(new Cell(pos.immutable(), shape));
-                    }
-                }
-            }
-        }
-        if (known == null) known = cells.toArray(Cell[]::new);
-        if (tubes.size() >= 8192) tubes.removeFirst();
-        tubes.put(key, known);
-        return known;
-    }
-
-    private boolean clearTube(Level level, BlockPos source, Vec3 from, Vec3 to) {
-        if (from.distanceToSqr(to) > 512 * 512) return false;
-        return BlockGetter.traverseBlocks(from.scale(.25), to.scale(.25), level, (world, group) -> {
-            Cell[] cells = tube(world, group);
-            if (cells == DENSE) return true;
-            for (Cell cell : cells) {
-                if (!cell.pos.equals(source) && nearCell(from, to, cell.pos) && cell.shape.clip(from, to, cell.pos) != null) return true;
-            }
-            return null;
-        }, world -> null) == null;
-    }
-
-    private static boolean nearCell(Vec3 from, Vec3 to, BlockPos pos) {
-        double first = 0, last = 1;
-        for (int axis = 0; axis < 3; axis++) {
-            double start = axis == 0 ? from.x : axis == 1 ? from.y : from.z;
-            double delta = (axis == 0 ? to.x : axis == 1 ? to.y : to.z) - start;
-            double min = (axis == 0 ? pos.getX() : axis == 1 ? pos.getY() : pos.getZ()) - .001;
-            if (delta == 0) { if (start < min || start > min + 1.002) return false; }
-            else {
-                double a = (min - start) / delta, b = (min + 1.002 - start) / delta;
-                first = Math.max(first, Math.min(a, b)); last = Math.min(last, Math.max(a, b));
-                if (first > last) return false;
-            }
-        }
-        return true;
-    }
-
     @Override
     public synchronized boolean visible(BlockPos source, LightField.Beam beam, BlockPos target) {
         Level level = reference.get();
         if (level == null) return false;
         Vec3 from = beam.origin(), to = target.getCenter();
         if (!target.equals(source) && from.distanceToSqr(to) > 1e-7 && full(target)) return false;
-        if (clearTube(level, source, from, to)) return true;
-        return BlockGetter.traverseBlocks(from, to, level, (world, pos) -> {
-            if (pos.equals(source) || world.isOutsideBuildHeight(pos)) return null;
-            Section section = section(world, pos);
-            if (section == null) {
-                var chunk = world.getChunkSource().getChunkForLighting(pos.getX() >> 4, pos.getZ() >> 4);
-                if (chunk == null) return Shapes.block().clip(from, to, pos);
-                BlockState state = chunk.getBlockState(pos);
-                if (state.getLightBlock(world, pos) < 15 && !state.useShapeForLightOcclusion()) return null;
-                return (state.useShapeForLightOcclusion() ? state.getOcclusionShape(world, pos) : Shapes.block()).clip(from, to, pos);
+        return LightTraversal.clear(from, to, new LightTraversal.Test() {
+            Section group;
+            @Override
+            public int skip(BlockPos pos) {
+                group = level.isOutsideBuildHeight(pos) ? null : section(level, pos);
+                if (group == null) return 0;
+                if (group.checked == -1L && group.occupied == 0) return 4;
+                classify(level, group, pos);
+                int bit = (pos.getX() & 12) >> 2 | pos.getZ() & 12 | (pos.getY() & 12) << 2;
+                return (group.occupied & 1L << bit) == 0 ? 2 : 0;
             }
-            classify(world, section, pos);
-            int cell = (pos.getY() & 15) << 8 | (pos.getZ() & 15) << 4 | pos.getX() & 15;
-            if ((section.full[cell >> 6] & 1L << cell) != 0) return Shapes.block().clip(from, to, pos);
-            if ((section.shaped[cell >> 6] & 1L << cell) != 0) return shape(world, section, pos, cell).clip(from, to, pos);
-            return null;
-        }, world -> null) == null;
+            @Override
+            public boolean blocked(BlockPos pos) {
+                if (pos.equals(source) || level.isOutsideBuildHeight(pos)) return false;
+                if (group == null) {
+                    var chunk = level.getChunkSource().getChunkForLighting(pos.getX() >> 4, pos.getZ() >> 4);
+                    if (chunk == null) return Shapes.block().clip(from, to, pos) != null;
+                    BlockState state = chunk.getBlockState(pos);
+                    if (state.getLightBlock(level, pos) < 15 && !state.useShapeForLightOcclusion()) return false;
+                    return (state.useShapeForLightOcclusion() ? state.getOcclusionShape(level, pos) : Shapes.block()).clip(from, to, pos) != null;
+                }
+                int cell = (pos.getY() & 15) << 8 | (pos.getZ() & 15) << 4 | pos.getX() & 15;
+                if ((group.full[cell >> 6] & 1L << cell) != 0) return Shapes.block().clip(from, to, pos) != null;
+                return (group.shaped[cell >> 6] & 1L << cell) != 0 && shape(level, group, pos, cell).clip(from, to, pos) != null;
+            }
+        });
     }
 
     @Override
@@ -214,9 +152,6 @@ final class LightOcclusion implements LightField.Visibility {
     public synchronized void invalidate(BlockPos pos) {
         currentKey = Long.MIN_VALUE;
         current = null;
-        for (int x = (pos.getX() >> 2) - 1; x <= (pos.getX() >> 2) + 1; x++)
-            for (int y = (pos.getY() >> 2) - 1; y <= (pos.getY() >> 2) + 1; y++)
-                for (int z = (pos.getZ() >> 2) - 1; z <= (pos.getZ() >> 2) + 1; z++) tubes.remove(BlockPos.asLong(x, y, z));
         for (int x = (pos.getX() - 1) >> 4; x <= (pos.getX() + 1) >> 4; x++)
             for (int y = (pos.getY() - 1) >> 4; y <= (pos.getY() + 1) >> 4; y++)
                 for (int z = (pos.getZ() - 1) >> 4; z <= (pos.getZ() + 1) >> 4; z++) sections.remove(SectionPos.asLong(x, y, z));
@@ -227,8 +162,6 @@ final class LightOcclusion implements LightField.Visibility {
     public synchronized void invalidateChunk(int x, int z) {
         currentKey = Long.MIN_VALUE;
         current = null;
-        tubes.keySet().removeIf((java.util.function.LongPredicate) key -> Math.abs((BlockPos.getX(key) >> 2) - x) <= 1
-                && Math.abs((BlockPos.getZ(key) >> 2) - z) <= 1);
         sections.keySet().removeIf((java.util.function.LongPredicate) key -> Math.abs(SectionPos.x(key) - x) <= 1
                 && Math.abs(SectionPos.z(key) - z) <= 1);
         reach.invalidate(new AABB(x * 16.0 - 1, -1e9, z * 16.0 - 1, x * 16.0 + 17, 1e9, z * 16.0 + 17));

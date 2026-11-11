@@ -21,7 +21,7 @@ import net.minecraft.world.phys.Vec3;
 /** Additive floodlight illumination. It neither places blocks nor propagates into cells outside its beams. */
 public final class LightField {
     static final int CACHE_SECTIONS = 512;
-    static final int VISIBILITY_SOURCES = 16;
+    static final int VISIBILITY_MASKS = 8192;
     private static final Map<Level, Field> LEVELS = new WeakHashMap<>();
     private static volatile BiConsumer<Level, AABB> changed = (level, bounds) -> { };
 
@@ -278,7 +278,7 @@ public final class LightField {
     record Change(AABB bounds, boolean weightsOnly) {
     }
 
-    record Snapshot(Field field, List<Entry> entries, long revision) {
+    record Snapshot(Field field, List<Entry> entries, long revision, long geometry) {
         int sample(BlockPos pos) {
             return field.sample(pos, entries, revision);
         }
@@ -289,7 +289,7 @@ public final class LightField {
                 if (entry.beam.intersects(box.minX, box.minY, box.minZ, box.maxX, box.maxY, box.maxZ,
                         field.visibility.range(entry.source, entry.beam)) && !field.visibility.hidden(entry.source, entry.beam, box)) candidates.add(entry);
             }
-            return new Snapshot(field, List.copyOf(candidates), revision);
+            return new Snapshot(field, List.copyOf(candidates), revision, geometry);
         }
     }
 
@@ -329,6 +329,9 @@ public final class LightField {
         final Long2ObjectLinkedOpenHashMap<Snapshot> snapshots = new Long2ObjectLinkedOpenHashMap<>();
         final Visibility visibility;
         volatile long revision;
+        long geometry;
+        int maskCount;
+        VisibilityMask oldestMask, newestMask;
 
         Field(Visibility visibility) {
             this.visibility = visibility;
@@ -375,11 +378,12 @@ public final class LightField {
                 if (sectionIntersects(cached.getLongKey(), affected)) {
                     cached.getValue().dirty = true;
                     if (before == null || next == null || !before.beam.origin.equals(next.beam.origin)) {
-                        cached.getValue().visibility.remove(id);
+                        forgetMask(cached.getValue(), id);
                     }
                 }
             }
             revision++;
+            if (!weightsOnly) geometry++;
             return new Change(affected, weightsOnly);
         }
 
@@ -414,24 +418,23 @@ public final class LightField {
             Snapshot known = snapshots.getAndMoveToLast(section);
             if (known != null && known.revision == revision) return known;
             List<Entry> candidates = new ArrayList<>();
-            for (Entry entry : chunkEntries(ChunkPos.asLong(SectionPos.x(section), SectionPos.z(section)))) {
-                if (entry.beam.intersectsSection(section)
-                        && entry.beam.intersectsSection(section, visibility.range(entry.source, entry.beam))
-                        && !visibility.hidden(entry.source, entry.beam, sectionBounds(section))) candidates.add(entry);
+            if (known != null && known.geometry == geometry) {
+                for (Entry entry : known.entries) candidates.add(fixtures.get(entry.source.asLong()));
+            } else {
+                for (Entry entry : chunkEntries(ChunkPos.asLong(SectionPos.x(section), SectionPos.z(section)))) {
+                    if (entry.beam.intersectsSection(section)
+                            && entry.beam.intersectsSection(section, visibility.range(entry.source, entry.beam))
+                            && !visibility.hidden(entry.source, entry.beam, sectionBounds(section))) candidates.add(entry);
+                }
             }
-            Snapshot snapshot = new Snapshot(this, List.copyOf(candidates), revision);
+            Snapshot snapshot = new Snapshot(this, List.copyOf(candidates), revision, geometry);
             if (known == null && snapshots.size() >= 1024) snapshots.removeFirst();
             snapshots.put(section, snapshot);
             return snapshot;
         }
 
         synchronized boolean affects(long section) {
-            for (Entry entry : chunkEntries(ChunkPos.asLong(SectionPos.x(section), SectionPos.z(section)))) {
-                if (entry.beam.intersectsSection(section)
-                        && entry.beam.intersectsSection(section, visibility.range(entry.source, entry.beam))
-                        && !visibility.hidden(entry.source, entry.beam, sectionBounds(section))) return true;
-            }
-            return false;
+            return !snapshot(section).entries.isEmpty();
         }
 
         int sample(BlockPos pos, List<Entry> entries, long version) {
@@ -449,7 +452,7 @@ public final class LightField {
                 cached = sections.getAndMoveToLast(section);
                 if (cached == null) {
                     if (sections.size() >= CACHE_SECTIONS) {
-                        sections.removeFirst();
+                        discard(sections.removeFirst());
                     }
                     cached = new CachedSection();
                     sections.put(section, cached);
@@ -488,14 +491,16 @@ public final class LightField {
                 if (sections.get(section) == cached && current != null && current.beam.origin.equals(entry.beam.origin)) {
                     mask = cached.visibility.get(entry.source.asLong());
                     if (mask != null && !mask.beam.origin.equals(entry.beam.origin)) {
-                        cached.visibility.remove(entry.source.asLong());
+                        forgetMask(cached, entry.source.asLong());
                         mask = null;
                     }
-                    if (mask == null && cached.visibility.size() < VISIBILITY_SOURCES) {
-                        mask = new VisibilityMask(entry.beam);
+                    if (mask == null) {
+                        if (maskCount >= VISIBILITY_MASKS) forgetMask(oldestMask.owner, oldestMask.source);
+                        mask = new VisibilityMask(entry.beam, cached, entry.source.asLong());
                         cached.visibility.put(entry.source.asLong(), mask);
                     }
-                    if (mask != null && (mask.visited[word] & bit) != 0) {
+                    remember(mask);
+                    if ((mask.visited[word] & bit) != 0) {
                         return (mask.visible[word] & bit) != 0;
                     }
                 }
@@ -512,6 +517,35 @@ public final class LightField {
                 }
             }
             return result;
+        }
+
+        private void remember(VisibilityMask mask) {
+            if (newestMask == mask) return;
+            if (mask.before != null || mask.after != null || oldestMask == mask) unlink(mask);
+            mask.before = newestMask;
+            if (newestMask == null) oldestMask = mask;
+            else newestMask.after = mask;
+            newestMask = mask;
+            maskCount++;
+        }
+
+        private void unlink(VisibilityMask mask) {
+            if (mask.before == null) oldestMask = mask.after;
+            else mask.before.after = mask.after;
+            if (mask.after == null) newestMask = mask.before;
+            else mask.after.before = mask.before;
+            mask.before = mask.after = null;
+            maskCount--;
+        }
+
+        private void forgetMask(CachedSection owner, long source) {
+            VisibilityMask mask = owner.visibility.remove(source);
+            if (mask != null) unlink(mask);
+        }
+
+        private void discard(CachedSection section) {
+            for (VisibilityMask mask : section.visibility.values()) unlink(mask);
+            section.visibility.clear();
         }
 
         synchronized List<Long> invalidate(BlockPos pos) {
@@ -534,6 +568,7 @@ public final class LightField {
                             && !visibility.hidden(entry.source, entry.beam, obstruction == null ? chunk : new AABB(obstruction))) {
                         removed.addAll(forget(entry.bounds));
                         revision++;
+                        geometry++;
                     }
                 }
             }
@@ -545,6 +580,7 @@ public final class LightField {
             sections.keySet().removeIf((java.util.function.LongPredicate) key -> {
                 if (sectionIntersects(key, bounds)) {
                     removed.add(key);
+                    discard(sections.get(key));
                     return true;
                 }
                 return false;
@@ -553,7 +589,11 @@ public final class LightField {
         }
 
         synchronized void forgetChunk(ChunkPos chunk) {
-            sections.keySet().removeIf((java.util.function.LongPredicate) key -> SectionPos.x(key) == chunk.x && SectionPos.z(key) == chunk.z);
+            sections.keySet().removeIf((java.util.function.LongPredicate) key -> {
+                if (SectionPos.x(key) != chunk.x || SectionPos.z(key) != chunk.z) return false;
+                discard(sections.get(key));
+                return true;
+            });
         }
     }
 
@@ -575,10 +615,15 @@ public final class LightField {
 
     private static final class VisibilityMask {
         final Beam beam;
+        final CachedSection owner;
+        final long source;
+        VisibilityMask before, after;
         final long[] visited = new long[64], visible = new long[64];
 
-        VisibilityMask(Beam beam) {
+        VisibilityMask(Beam beam, CachedSection owner, long source) {
             this.beam = beam;
+            this.owner = owner;
+            this.source = source;
         }
     }
 

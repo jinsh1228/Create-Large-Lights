@@ -39,10 +39,8 @@ final class GpuProjectionState implements AutoCloseable {
     private final float polygonFactor = GL11.glGetFloat(GL11.GL_POLYGON_OFFSET_FACTOR);
     private final float polygonUnits = GL11.glGetFloat(GL11.GL_POLYGON_OFFSET_UNITS);
     private final boolean[] colors = new boolean[4];
-    private final int texture0, texture1;
+    private final int[] textures, samplerBindings;
     private final boolean samplers = samplerObjects();
-    private final int sampler0 = samplers ? GL30.glGetIntegeri(GL33.GL_SAMPLER_BINDING, 0) : 0;
-    private final int sampler1 = samplers ? GL30.glGetIntegeri(GL33.GL_SAMPLER_BINDING, 1) : 0;
 
     static boolean supported() {
         return GL.getCapabilities().OpenGL32 && GL11.glGetInteger(GL11.GL_MAX_TEXTURE_SIZE) >= 1024;
@@ -53,7 +51,11 @@ final class GpuProjectionState implements AutoCloseable {
         return capabilities.OpenGL33 || capabilities.GL_ARB_sampler_objects;
     }
 
-    GpuProjectionState() {
+    GpuProjectionState() { this(2); }
+
+    GpuProjectionState(int units) {
+        textures = new int[units];
+        samplerBindings = new int[units];
         try (MemoryStack stack = MemoryStack.stackPush()) {
             var size = stack.mallocInt(4);
             GL11.glGetIntegerv(GL11.GL_VIEWPORT, size);
@@ -62,10 +64,11 @@ final class GpuProjectionState implements AutoCloseable {
             GL11.glGetBooleanv(GL11.GL_COLOR_WRITEMASK, mask);
             for (int i = 0; i < 4; i++) colors[i] = mask.get(i) != 0;
         }
-        GL13.glActiveTexture(GL13.GL_TEXTURE0);
-        texture0 = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
-        GL13.glActiveTexture(GL13.GL_TEXTURE1);
-        texture1 = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        for (int i = 0; i < units; i++) {
+            GL13.glActiveTexture(GL13.GL_TEXTURE0 + i);
+            textures[i] = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+            if (samplers) samplerBindings[i] = GL30.glGetIntegeri(GL33.GL_SAMPLER_BINDING, i);
+        }
         GL13.glActiveTexture(activeTexture);
     }
 
@@ -78,13 +81,10 @@ final class GpuProjectionState implements AutoCloseable {
         GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, framebuffer);
         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFramebuffer);
         GL11.glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
-        GL13.glActiveTexture(GL13.GL_TEXTURE0);
-        GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture0);
-        GL13.glActiveTexture(GL13.GL_TEXTURE1);
-        GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture1);
-        if (samplers) {
-            GL33.glBindSampler(0, sampler0);
-            GL33.glBindSampler(1, sampler1);
+        for (int i = 0; i < textures.length; i++) {
+            GL13.glActiveTexture(GL13.GL_TEXTURE0 + i);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, textures[i]);
+            if (samplers) GL33.glBindSampler(i, samplerBindings[i]);
         }
         GL13.glActiveTexture(activeTexture);
         GL11.glDepthFunc(depthFunction);

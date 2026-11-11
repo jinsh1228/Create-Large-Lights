@@ -37,6 +37,7 @@ import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 /** Shared terrain meshes and cached, per-light shadow maps; colour and intensity remain current every frame. */
 public final class GpuLightProjection {
     private static final int SHADOW_SIZE = 1024;
+    static final int LIGHT_BATCH = 4;
     private static final int CACHED_SHADOWS = 128;
     private static final int FORGET_FRAMES = 600;
     private static final float NEAR = .25f;
@@ -139,8 +140,8 @@ public final class GpuLightProjection {
                     depth = new Program("depth.fsh");
                     surface = new Program("projector.fsh");
                 }
-                LogUtils.getLogger().info("GPU floodlight projection ready: shadow={} cached_maps={} max_depth_bytes={}",
-                        SHADOW_SIZE, CACHED_SHADOWS, (long) CACHED_SHADOWS * SHADOW_SIZE * SHADOW_SIZE * 4);
+                LogUtils.getLogger().info("GPU floodlight projection ready: shadow={} cached_maps={} max_depth_bytes={} light_batch={}",
+                        SHADOW_SIZE, CACHED_SHADOWS, (long) CACHED_SHADOWS * SHADOW_SIZE * SHADOW_SIZE * 4, LIGHT_BATCH);
             }
             queued.put(anchor.asLong(), new Request(anchor.immutable(), origin, direction, up.normalize(), tangent,
                     range, strength, color, radius, scene));
@@ -191,16 +192,13 @@ public final class GpuLightProjection {
         }
         Shadow scratch = null;
         long scratchId = 0;
-        try (GpuProjectionState saved = new GpuProjectionState()) {
+        try (GpuProjectionState saved = new GpuProjectionState(LIGHT_BATCH + 1)) {
             if (GpuProjectionState.samplerObjects()) {
-                GL33.glBindSampler(0, 0);
-                GL33.glBindSampler(1, 0);
+                for (int i = 0; i <= LIGHT_BATCH; i++) GL33.glBindSampler(i, 0);
             }
             GL11.glDisable(GL11.GL_SCISSOR_TEST);
             GL11.glDisable(GL11.GL_STENCIL_TEST);
             GL11.glDisable(GL11.GL_CULL_FACE);
-            GL13.glActiveTexture(GL13.GL_TEXTURE0);
-            GL11.glBindTexture(GL11.GL_TEXTURE_2D, mc.getTextureManager().getTexture(InventoryMenu.BLOCK_ATLAS).getId());
             Vec3 camera = event.getCamera().getPosition();
             Matrix4f cameraProjection = new Matrix4f(event.getProjectionMatrix()).mul(event.getModelViewMatrix());
             if (!pinned.isEmpty()) {
@@ -211,10 +209,18 @@ public final class GpuLightProjection {
                     }
                 }
             }
+            Request[] requests = new Request[LIGHT_BATCH];
+            Shadow[] maps = new Shadow[LIGHT_BATCH];
+            int count = 0;
             for (Map.Entry<Long, Request> entry : queued.entrySet()) {
                 Request request = entry.getValue();
+                boolean transientMap = !pinned.isEmpty() && !pinned.contains(entry.getKey());
+                if (transientMap && count != 0) {
+                    surfaces(requests, maps, count, saved, cameraProjection, camera, event.getFrustum());
+                    count = 0;
+                }
                 Shadow shadow;
-                if (pinned.isEmpty() || pinned.contains(entry.getKey())) {
+                if (!transientMap) {
                     shadow = shadow(entry.getKey(), pinned);
                 } else {
                     if (scratch == null) scratch = new Shadow();
@@ -224,40 +230,18 @@ public final class GpuLightProjection {
                 }
                 if (!shadow.matches(request)) {
                     shadow.position(request);
+                    GL13.glActiveTexture(GL13.GL_TEXTURE0);
+                    GL11.glBindTexture(GL11.GL_TEXTURE_2D, mc.getTextureManager().getTexture(InventoryMenu.BLOCK_ATLAS).getId());
                     shadow(request, shadow);
                 }
-                GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, saved.framebuffer);
-                GL11.glViewport(saved.viewport[0], saved.viewport[1], saved.viewport[2], saved.viewport[3]);
-                GL11.glColorMask(true, true, true, true);
-                GL11.glEnable(GL11.GL_DEPTH_TEST);
-                GL11.glDepthFunc(GL11.GL_LEQUAL);
-                GL11.glDepthMask(false);
-                GL11.glEnable(GL11.GL_BLEND);
-                GL14.glBlendEquation(GL14.GL_FUNC_ADD);
-                GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE);
-                GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
-                GL11.glPolygonOffset(-1, -1);
-                GL20.glUseProgram(surface.id);
-                matrix(surface.viewProjection, new Matrix4f(cameraProjection).translate(
-                        (float) (request.anchor.getX() - camera.x), (float) (request.anchor.getY() - camera.y),
-                        (float) (request.anchor.getZ() - camera.z)));
-                matrix(surface.lightProjection, shadow.projection);
-                vector(surface.origin, shadow.origin);
-                vector(surface.direction, shadow.direction);
-                vector(surface.right, shadow.right);
-                vector(surface.up, shadow.up);
-                GL20.glUniform3f(surface.color, (request.color >> 16 & 255) / 255f,
-                        (request.color >> 8 & 255) / 255f, (request.color & 255) / 255f);
-                GL20.glUniform1f(surface.tangent, (float) request.tangent);
-                GL20.glUniform1f(surface.range, request.range);
-                GL20.glUniform1f(surface.strength, request.strength);
-                GL20.glUniform1f(surface.radius, request.radius);
-                GL20.glUniform1f(surface.near, NEAR);
-                GL13.glActiveTexture(GL13.GL_TEXTURE1);
-                GL11.glBindTexture(GL11.GL_TEXTURE_2D, shadow.texture);
-                draw(surface, request, false, event.getFrustum());
-                lastLights++;
+                requests[count] = request;
+                maps[count++] = shadow;
+                if (count == LIGHT_BATCH || transientMap) {
+                    surfaces(requests, maps, count, saved, cameraProjection, camera, event.getFrustum());
+                    count = 0;
+                }
             }
+            if (count != 0) surfaces(requests, maps, count, saved, cameraProjection, camera, event.getFrustum());
             if (scratch != null) {
                 shadows.put(scratchId, scratch);
                 scratch = null;
@@ -268,6 +252,64 @@ public final class GpuLightProjection {
         } finally {
             queued.clear();
         }
+    }
+
+    /** Rasterize shared receiver geometry once for up to four independent lights. */
+    private static void surfaces(Request[] requests, Shadow[] maps, int count, GpuProjectionState saved,
+                                 Matrix4f cameraProjection, Vec3 camera, Frustum frustum) {
+        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, saved.framebuffer);
+        GL11.glViewport(saved.viewport[0], saved.viewport[1], saved.viewport[2], saved.viewport[3]);
+        GL11.glColorMask(true, true, true, true);
+        GL11.glEnable(GL11.GL_DEPTH_TEST);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GL11.glDepthMask(false);
+        GL11.glEnable(GL11.GL_BLEND);
+        GL14.glBlendEquation(GL14.GL_FUNC_ADD);
+        GL11.glBlendFunc(GL11.GL_ONE, GL11.GL_ONE);
+        GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
+        GL11.glPolygonOffset(-1, -1);
+        GL20.glUseProgram(surface.id);
+        GL20.glUniform1f(surface.near, NEAR);
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, Minecraft.getInstance().getTextureManager().getTexture(InventoryMenu.BLOCK_ATLAS).getId());
+        Map<GpuLightGeometry.Mesh, Integer> meshes = new LinkedHashMap<>();
+        for (int i = 0; i < count; i++) {
+            Request request = requests[i];
+            Shadow shadow = maps[i];
+            LightUniforms uniforms = surface.lights[i];
+            matrix(uniforms.projection, shadow.projection);
+            vector(uniforms.origin, shadow.origin);
+            vector(uniforms.direction, shadow.direction);
+            vector(uniforms.right, shadow.right);
+            vector(uniforms.up, shadow.up);
+            GL20.glUniform3f(uniforms.color, (request.color >> 16 & 255) / 255f,
+                    (request.color >> 8 & 255) / 255f, (request.color & 255) / 255f);
+            GL20.glUniform1f(uniforms.tangent, (float) request.tangent);
+            GL20.glUniform1f(uniforms.range, request.range);
+            GL20.glUniform1f(uniforms.strength, request.strength);
+            GL20.glUniform1f(uniforms.radius, request.radius);
+            GL13.glActiveTexture(GL13.GL_TEXTURE1 + i);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, shadow.texture);
+            for (GpuLightGeometry.Mesh mesh : request.scene.meshes()) {
+                if (mesh.receives() && frustum.isVisible(mesh.bounds())) meshes.merge(mesh, 1 << i, (a, b) -> a | b);
+            }
+        }
+        Matrix4f view = new Matrix4f();
+        for (var entry : meshes.entrySet()) {
+            GpuLightGeometry.Mesh mesh = entry.getKey();
+            BlockPos origin = mesh.origin();
+            matrix(surface.viewProjection, view.set(cameraProjection).translate((float) (origin.getX() - camera.x),
+                    (float) (origin.getY() - camera.y), (float) (origin.getZ() - camera.z)));
+            GL20.glUniform1i(surface.activeMask, entry.getValue());
+            for (int i = 0; i < count; i++) {
+                BlockPos anchor = requests[i].anchor;
+                GL20.glUniform3f(surface.lights[i].offset, origin.getX() - anchor.getX(),
+                        origin.getY() - anchor.getY(), origin.getZ() - anchor.getZ());
+            }
+            mesh.draw();
+            surfaceDraws++;
+        }
+        lastLights += count;
     }
 
     private static Shadow shadow(long id, Set<Long> pinned) {
@@ -314,32 +356,32 @@ public final class GpuLightProjection {
         GL20.glUniform1f(depth.tangent, (float) request.tangent);
         GL20.glUniform1f(depth.shadowSize, SHADOW_SIZE);
         GL20.glUniform1f(depth.near, NEAR);
-        draw(depth, request, true, null);
+        drawShadow(depth, request);
         shadowUpdates++;
     }
 
-    private static void draw(Program program, Request request, boolean shadowPass, Frustum frustum) {
+    private static void drawShadow(Program program, Request request) {
         for (GpuLightGeometry.Mesh mesh : request.scene.meshes()) {
-            if (!shadowPass && (!mesh.receives() || !frustum.isVisible(mesh.bounds()))) continue;
             GL20.glUniform1i(program.opaqueGeometry, mesh.receives() ? 0 : 1);
             BlockPos origin = mesh.origin();
             GL20.glUniform3f(program.sectionOffset, origin.getX() - request.anchor.getX(),
                     origin.getY() - request.anchor.getY(), origin.getZ() - request.anchor.getZ());
-            if (shadowPass) mesh.draw(request.anchor); else mesh.draw();
-            if (!shadowPass) surfaceDraws++;
+            mesh.draw(request.anchor);
         }
     }
 
     private static final class Program {
-        final int id, viewProjection, lightProjection, sectionOffset, origin, direction, right, up, color,
-                tangent, range, strength, radius, near, opaqueGeometry, shadowSize;
+        final int id, viewProjection, lightProjection, sectionOffset, origin, direction, right, up,
+                tangent, near, opaqueGeometry, shadowSize, activeMask;
+        final LightUniforms[] lights;
 
         Program(String fragment) {
-            int vertex = shader(GL20.GL_VERTEX_SHADER, "projector.vsh");
+            boolean batch = fragment.equals("projector.fsh");
+            int vertex = shader(GL20.GL_VERTEX_SHADER, "projector.vsh", batch);
             int pixel = 0;
             id = GL20.glCreateProgram();
             try {
-                pixel = shader(GL20.GL_FRAGMENT_SHADER, fragment);
+                pixel = shader(GL20.GL_FRAGMENT_SHADER, fragment, batch);
                 GL20.glAttachShader(id, vertex);
                 GL20.glAttachShader(id, pixel);
                 String[] attributes = {"Position", "UV", "Normal", "Tint", "GeomNormal"};
@@ -357,13 +399,19 @@ public final class GpuLightProjection {
             }
             viewProjection = location("ViewProjection"); lightProjection = location("LightProjection");
             sectionOffset = location("SectionOffset"); origin = location("Origin"); direction = location("Direction");
-            right = location("LightRight"); up = location("LightUp"); color = location("LightColor");
-            tangent = location("Tangent"); range = location("Range"); strength = location("Strength"); radius = location("Radius");
+            right = location("LightRight"); up = location("LightUp"); tangent = location("Tangent");
             near = location("Near"); opaqueGeometry = location("OpaqueGeometry");
             shadowSize = location("ShadowSize");
+            activeMask = location("ActiveMask");
+            lights = batch ? new LightUniforms[LIGHT_BATCH] : new LightUniforms[0];
             GL20.glUseProgram(id);
             GL20.glUniform1i(location("Atlas"), 0);
-            GL20.glUniform1i(location("Shadow"), 1);
+            if (batch) {
+                for (int i = 0; i < LIGHT_BATCH; i++) {
+                    lights[i] = new LightUniforms(this, i);
+                    GL20.glUniform1i(location("Shadow" + i), 1 + i);
+                }
+            }
         }
 
         int location(String name) {
@@ -371,11 +419,25 @@ public final class GpuLightProjection {
         }
     }
 
-    private static int shader(int type, String name) {
+    private static final class LightUniforms {
+        final int projection, offset, origin, direction, right, up, color, tangent, range, strength, radius;
+        LightUniforms(Program program, int index) {
+            String at = "[" + index + "]";
+            projection = program.location("LightProjections" + at); offset = program.location("SectionOffsets" + at);
+            origin = program.location("Origins" + at); direction = program.location("Directions" + at);
+            right = program.location("LightRights" + at); up = program.location("LightUps" + at);
+            color = program.location("LightColors" + at); tangent = program.location("Tangents" + at);
+            range = program.location("Ranges" + at); strength = program.location("Strengths" + at); radius = program.location("Radii" + at);
+        }
+    }
+
+    private static int shader(int type, String name, boolean batch) {
         var resource = CreateLargeLights.id("shaders/projection/" + name);
         int shader = GL20.glCreateShader(type);
         try (var input = Minecraft.getInstance().getResourceManager().open(resource)) {
-            GL20.glShaderSource(shader, new String(input.readAllBytes(), StandardCharsets.UTF_8));
+            String source = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+            if (batch) source = source.replace("#version 150", "#version 150\n#define LIGHT_BATCH " + LIGHT_BATCH);
+            GL20.glShaderSource(shader, source);
             GL20.glCompileShader(shader);
             if (GL20.glGetShaderi(shader, GL20.GL_COMPILE_STATUS) == 0) {
                 throw new IllegalStateException(GL20.glGetShaderInfoLog(shader));

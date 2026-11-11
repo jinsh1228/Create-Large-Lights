@@ -91,6 +91,7 @@ if (gpuDemo) {
         gameDirectory = file('run-gpu-demo')
         systemProperty 'createLargeLights.shapeDemo', 'true'
         systemProperty 'createLargeLights.gpuDemo', 'true'
+        systemProperty 'createLargeLights.gpuDemo.checkBatch', providers.gradleProperty('gpuCheck').isPresent().toString()
         systemProperty 'createLargeLights.gpuDemo.mode', providers.gradleProperty('gpuMode').getOrElse('gpu')
         systemProperty 'createLargeLights.gpuDemo.shadowSize', providers.gradleProperty('shadowSize').getOrElse('1024')
         systemProperty 'createLargeLights.gpuDemo.lightCount', providers.gradleProperty('gpuLights').getOrElse('1')
