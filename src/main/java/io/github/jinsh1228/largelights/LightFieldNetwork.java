@@ -5,6 +5,7 @@ import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.Arrays;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
@@ -30,7 +31,8 @@ import net.neoforged.neoforge.network.PacketDistributor;
 /** Event-driven, bounded synchronization of sections that players actually use. */
 public final class LightFieldNetwork {
     private static final int CELLS_PER_TICK = 32768;
-    private static final long NANOS_PER_TICK = 2_000_000;
+    private static final long MIN_NANOS_PER_TICK = 2_000_000;
+    private static final long MAX_NANOS_PER_TICK = 8_000_000;
     private static final byte[] EMPTY = new byte[0];
     private static final Map<ServerLevel, ServerState> servers = new WeakHashMap<>();
     private static final ArrayDeque<ServerLevel> scheduled = new ArrayDeque<>();
@@ -50,6 +52,7 @@ public final class LightFieldNetwork {
     private static final class Watch {
         final Set<ServerPlayer> players = new HashSet<>();
         final LongOpenHashSet sections = new LongOpenHashSet();
+        final Long2ObjectOpenHashMap<byte[]> last = new Long2ObjectOpenHashMap<>();
         final LevelChunk chunk;
         boolean active;
 
@@ -73,6 +76,8 @@ public final class LightFieldNetwork {
         final byte[] values = new byte[2048];
         int cell;
         boolean lit;
+        int tileAt = -1;
+        LightField.Snapshot tile;
 
         Work(long section, LightField.Snapshot snapshot) {
             this.section = section;
@@ -237,6 +242,7 @@ public final class LightFieldNetwork {
                     event.getLevel().dimension().location(), event.getPos().toLong(), true));
         }
         relevant(event.getLevel(), event.getPos().toLong(), watch);
+        watch.last.clear(); // A newly watching player must receive a complete initial set.
         state.dirty.addAll(watch.sections);
         queue(event.getLevel(), state);
     }
@@ -289,6 +295,7 @@ public final class LightFieldNetwork {
                         }
                         if (!active) {
                             watch.sections.clear();
+                            watch.last.clear();
                             state.dirty.removeIf((java.util.function.LongPredicate) id -> chunk(id) == chunk);
                             if (state.work != null && chunk(state.work.section) == chunk) {
                                 state.work = null;
@@ -323,12 +330,7 @@ public final class LightFieldNetwork {
                 for (int y = Math.max(0, i - 1); y <= Math.min(sections.length - 1, i + 1); y++) {
                     long section = SectionPos.asLong(watch.chunk.getPos().x, y + level.getMinSection(), watch.chunk.getPos().z);
                     if (watch.sections.contains(section)) continue;
-                    for (LightField.Entry entry : entries) {
-                        if (entry.beam().intersectsSection(section)) {
-                            watch.sections.add(section);
-                            break;
-                        }
-                    }
+                    if (LightField.affects(level, section)) watch.sections.add(section);
                 }
             }
         }
@@ -341,16 +343,19 @@ public final class LightFieldNetwork {
         if (watch != null && watch.players.contains(player) && SectionPos.y(section) >= level.getMinSection()
                 && SectionPos.y(section) < level.getMaxSection()) {
             watch.sections.add(section);
-            boolean affected = false;
-            for (LightField.Entry entry : LightField.entries(level, chunk(section))) {
-                affected |= entry.beam().intersectsSection(section);
-            }
+            boolean affected = LightField.affects(level, section);
             if (!affected) {
                 PacketDistributor.sendToPlayer(player,
                         new LightFieldPacket(level.dimension().location(), section, EMPTY));
                 return;
             }
-            state.dirty.add(section);
+            byte[] known = watch.last.get(section);
+            if (known != null && !state.dirty.contains(section) && (state.work == null || state.work.section != section)) {
+                PacketDistributor.sendToPlayer(player, new LightFieldPacket(level.dimension().location(), section, known));
+                return;
+            }
+            watch.last.remove(section); // Requests need a reply even when the newly computed values are unchanged.
+            state.dirty.addAndMoveToFirst(section);
             queue(level, state);
         }
     }
@@ -364,6 +369,8 @@ public final class LightFieldNetwork {
 
     private static void tick(ServerTickEvent.Post event) {
         long start = System.nanoTime();
+        long budget = Math.max(MIN_NANOS_PER_TICK, Math.min(MAX_NANOS_PER_TICK,
+                (45_000_000 - event.getServer().getAverageTickTimeNanos()) / 4));
         for (ServerState state : servers.values()) {
             state.lastNanos = 0;
         }
@@ -372,8 +379,8 @@ public final class LightFieldNetwork {
         }
         int cells = 0, completed = 0;
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-        while (cells < CELLS_PER_TICK && completed < 2 && !scheduled.isEmpty()
-                && System.nanoTime() - start < NANOS_PER_TICK) {
+        while (cells < CELLS_PER_TICK && completed < 64 && !scheduled.isEmpty()
+                && System.nanoTime() - start < budget) {
             ServerLevel level = scheduled.removeFirst();
             ServerState state = servers.get(level);
             if (state == null) {
@@ -387,13 +394,7 @@ public final class LightFieldNetwork {
                 }
                 long section = state.dirty.removeFirstLong();
                 state.work = new Work(section, LightField.snapshot(level, section));
-                boolean affected = false;
-                for (LightField.Entry entry : LightField.entries(level, chunk(state.work.section))) {
-                    affected |= entry.beam().intersectsSection(state.work.section);
-                }
-                if (!affected) {
-                    state.work.cell = 4096;
-                }
+                if (state.work.snapshot == null || state.work.snapshot.entries().isEmpty()) state.work.cell = 4096;
             }
             Work work = state.work;
             Watch watch = state.watches.get(chunk(work.section));
@@ -405,22 +406,35 @@ public final class LightFieldNetwork {
             int x = SectionPos.x(work.section) << 4, y = SectionPos.y(work.section) << 4, z = SectionPos.z(work.section) << 4;
             int passLimit = Math.min(CELLS_PER_TICK, cells + 256);
             while (work.cell < 4096 && cells < passLimit) {
-                int index = work.cell++;
+                int tile = work.cell >> 6;
+                if (work.tileAt != tile) {
+                    work.tileAt = tile;
+                    int tx = x + ((tile & 3) << 2), tz = z + ((tile >> 2 & 3) << 2), ty = y + ((tile >> 4) << 2);
+                    work.tile = work.snapshot == null ? null : work.snapshot.tile(new AABB(tx, ty, tz, tx + 4, ty + 4, tz + 4));
+                }
+                if (work.tile == null || work.tile.entries().isEmpty()) {
+                    cells += 64;
+                    work.cell = (tile + 1) << 6;
+                    continue;
+                }
+                int local = work.cell++ & 63;
+                int index = ((tile >> 4) * 4 + (local >> 4)) << 8
+                        | ((tile >> 2 & 3) * 4 + (local >> 2 & 3)) << 4 | (tile & 3) * 4 + (local & 3);
                 pos.set(x + (index & 15), y + (index >> 8), z + ((index >> 4) & 15));
-                int value = work.snapshot == null ? 0 : work.snapshot.sample(pos);
+                int value = work.tile.sample(pos);
                 work.values[index >> 1] |= (byte) (value << ((index & 1) << 2));
                 work.lit |= value != 0;
                 cells++;
-                if (System.nanoTime() - start >= NANOS_PER_TICK) {
+                if (System.nanoTime() - start >= budget) {
                     break;
                 }
             }
             if (work.cell == 4096) {
-                LightFieldPacket packet = new LightFieldPacket(level.dimension().location(), work.section,
-                        work.lit ? work.values : EMPTY);
-                for (ServerPlayer player : watch.players) {
-                    if (player.serverLevel() == level) {
-                        PacketDistributor.sendToPlayer(player, packet);
+                byte[] values = work.lit ? work.values : EMPTY;
+                if (!Arrays.equals(watch.last.put(work.section, values), values)) {
+                    LightFieldPacket packet = new LightFieldPacket(level.dimension().location(), work.section, values);
+                    for (ServerPlayer player : watch.players) {
+                        if (player.serverLevel() == level) PacketDistributor.sendToPlayer(player, packet);
                     }
                 }
                 state.work = null;
@@ -429,7 +443,7 @@ public final class LightFieldNetwork {
             }
             state.lastNanos += System.nanoTime() - passStart;
             queue(level, state);
-            if (System.nanoTime() - start >= NANOS_PER_TICK) {
+            if (System.nanoTime() - start >= budget) {
                 break;
             }
         }

@@ -97,7 +97,10 @@ if (gpuDemo) {
         systemProperty 'createLargeLights.gpuDemo.angle', providers.gradleProperty('gpuAngle').getOrElse('oblique')
         systemProperty 'createLargeLights.gpuDemo.performance', providers.gradleProperty('gpuPerf').isPresent().toString()
         systemProperty 'createLargeLights.gpuDemo.motion', providers.gradleProperty('gpuMotion').getOrElse('0')
+        if (providers.gradleProperty('gpuRange').isPresent()) systemProperty 'createLargeLights.gpuDemo.range', providers.gradleProperty('gpuRange').get()
+        if (providers.gradleProperty('gpuHeight').isPresent()) systemProperty 'createLargeLights.gpuDemo.height', providers.gradleProperty('gpuHeight').get()
         if (providers.gradleProperty('gpuPerf').isPresent()) jvmArgument "-Xmx${providers.gradleProperty('gpuHeap').getOrElse('3G')}"
+        if (providers.gradleProperty('gpuProfile').isPresent()) jvmArgument "-XX:StartFlightRecording=filename=${providers.gradleProperty('gpuProfile').get()},settings=profile,delay=20s,duration=50s,maxsize=7m"
         programArguments.addAll('--width', '1280', '--height', '720')
     }
 }

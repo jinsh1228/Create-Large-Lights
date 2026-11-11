@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -25,6 +26,7 @@ import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.client.model.IQuadTransformer;
 import net.neoforged.neoforge.client.model.data.ModelData;
 
@@ -35,20 +37,45 @@ public final class LightModelSnapshots {
     private static final int MAX_SECTIONS = 128;
     private static final Snapshot EMPTY = new Snapshot(java.util.Collections.nCopies(7, List.of()), List.of());
     private static volatile Cache cache = new Cache(null);
+    private static final Map<Object, Watch> watches = new WeakHashMap<>();
+    private static long changes;
+
+    private static final class Watch {
+        final AABB bounds;
+        long revision;
+        Watch(AABB bounds) { this.bounds = bounds; revision = ++changes; }
+    }
+
+    static long watch(Object owner, AABB bounds) {
+        Watch known = watches.get(owner);
+        if (known == null || !known.bounds.equals(bounds)) {
+            known = new Watch(bounds);
+            watches.put(owner, known);
+        }
+        return known.revision;
+    }
+
+    private static void changed(AABB area) {
+        for (Watch watch : watches.values()) if (watch.bounds.intersects(area)) watch.revision = ++changes;
+    }
 
     private LightModelSnapshots() {
     }
 
     public static void clear() {
         cache = new Cache(null);
+        watches.clear();
     }
 
     public static void sectionChanged(long key) {
+        int x = SectionPos.x(key) * 16, y = SectionPos.y(key) * 16, z = SectionPos.z(key) * 16;
+        changed(new AABB(x - 2, y - 2, z - 2, x + 18, y + 18, z + 18));
         cache.remove(key);
         GpuLightGeometry.sectionChanged(key);
     }
 
     public static void chunkChanged(int x, int z) {
+        changed(new AABB(x * 16.0 - 2, -1e9, z * 16.0 - 2, x * 16.0 + 18, 1e9, z * 16.0 + 18));
         GpuLightGeometry.chunkChanged(x, z);
         Cache current = cache;
         for (long key : current.sections.keySet()) {

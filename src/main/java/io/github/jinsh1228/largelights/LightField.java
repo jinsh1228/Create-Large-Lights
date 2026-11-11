@@ -1,6 +1,5 @@
 package io.github.jinsh1228.largelights;
 
-import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -14,13 +13,10 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
-import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import net.minecraft.world.phys.shapes.Shapes;
 
 /** Additive floodlight illumination. It neither places blocks nor propagates into cells outside its beams. */
 public final class LightField {
@@ -76,9 +72,13 @@ public final class LightField {
                     * edge * edge * (3 - 2 * edge) * reach;
         }
 
-        AABB bounds() {
-            Vec3 end = origin.add(direction.scale(range));
-            double width = Math.min(radius, Math.max(0.08, range * tangent));
+        public AABB bounds() {
+            return bounds(range);
+        }
+
+        public AABB bounds(double extent) {
+            Vec3 end = origin.add(direction.scale(extent));
+            double width = Math.min(radius, Math.max(0.08, extent * tangent));
             return new AABB(Math.min(origin.x, end.x), Math.min(origin.y, end.y), Math.min(origin.z, end.z),
                     Math.max(origin.x, end.x), Math.max(origin.y, end.y), Math.max(origin.z, end.z)).inflate(width);
         }
@@ -89,22 +89,34 @@ public final class LightField {
         }
 
         boolean intersectsSection(long section) {
+            return intersectsSection(section, range);
+        }
+
+        boolean intersectsSection(long section, double extent) {
             int x = SectionPos.x(section) << 4, y = SectionPos.y(section) << 4, z = SectionPos.z(section) << 4;
-            return intersects(x, y, z, x + 16, y + 16, z + 16);
+            return intersects(x, y, z, x + 16, y + 16, z + 16, extent);
         }
 
         boolean intersectsBlock(BlockPos pos) {
-            return intersects(pos.getX(), pos.getY(), pos.getZ(), pos.getX() + 1.0, pos.getY() + 1.0, pos.getZ() + 1.0);
+            return intersectsBlock(pos, range);
+        }
+
+        boolean intersectsBlock(BlockPos pos, double extent) {
+            return intersects(pos.getX(), pos.getY(), pos.getZ(), pos.getX() + 1.0, pos.getY() + 1.0, pos.getZ() + 1.0, extent);
         }
 
         private boolean intersects(double minX, double minY, double minZ, double maxX, double maxY, double maxZ) {
+            return intersects(minX, minY, minZ, maxX, maxY, maxZ, range);
+        }
+
+        private boolean intersects(double minX, double minY, double minZ, double maxX, double maxY, double maxZ, double extentRange) {
             double x = (minX + maxX) * .5 - origin.x;
             double y = (minY + maxY) * .5 - origin.y;
             double z = (minZ + maxZ) * .5 - origin.z;
             double hx = (maxX - minX) * .5, hy = (maxY - minY) * .5, hz = (maxZ - minZ) * .5;
             double along = x * direction.x + y * direction.y + z * direction.z;
             double extent = hx * Math.abs(direction.x) + hy * Math.abs(direction.y) + hz * Math.abs(direction.z);
-            if (along + extent < -1e-7 || along - extent > range + 1e-7) {
+            if (along + extent < -1e-7 || along - extent > extentRange + 1e-7) {
                 return false;
             }
             x -= along * direction.x;
@@ -137,11 +149,7 @@ public final class LightField {
         synchronized (LEVELS) {
             Field found = LEVELS.get(level);
             if (found == null && create) {
-                WeakReference<Level> reference = new WeakReference<>(level);
-                found = new Field((source, beam, target) -> {
-                    Level world = reference.get();
-                    return world != null && visible(world, source, beam.origin, target.getCenter());
-                });
+                found = new Field(new LightOcclusion(level));
                 LEVELS.put(level, found);
             }
             return found;
@@ -198,14 +206,16 @@ public final class LightField {
     public static void invalidate(Level level, BlockPos obstruction) {
         Field field = field(level, false);
         if (field != null) {
+            List<Long> removed = field.invalidate(obstruction);
             if (level instanceof ServerLevel server) {
                 for (Entry entry : field.chunkEntries(ChunkPos.asLong(obstruction.getX() >> 4, obstruction.getZ() >> 4))) {
-                    if (entry.beam.intersectsBlock(obstruction)) {
+                    if (entry.beam.intersectsBlock(obstruction, field.visibility.range(entry.source, entry.beam))
+                            && !field.visibility.hidden(entry.source, entry.beam, new AABB(obstruction))) {
                         LightFieldNetwork.changed(server, entry.bounds);
                     }
                 }
             }
-            for (long section : field.invalidate(obstruction)) {
+            for (long section : removed) {
                 changed.accept(level, sectionBounds(section));
             }
         }
@@ -214,12 +224,16 @@ public final class LightField {
     public static void invalidateChunk(Level level, int x, int z) {
         Field field = field(level, false);
         if (field != null) {
+            List<Long> removed = field.invalidateChunk(x, z);
             if (level instanceof ServerLevel server) {
+                AABB chunk = new AABB(x * 16.0, -1e9, z * 16.0, x * 16.0 + 16, 1e9, z * 16.0 + 16);
                 for (Entry entry : field.chunkEntries(ChunkPos.asLong(x, z))) {
-                    LightFieldNetwork.changed(server, entry.bounds);
+                    if (entry.beam.bounds(field.visibility.range(entry.source, entry.beam)).intersects(chunk)
+                            && !field.visibility.hidden(entry.source, entry.beam, chunk))
+                        LightFieldNetwork.changed(server, entry.bounds);
                 }
             }
-            for (long section : field.invalidateChunk(x, z)) {
+            for (long section : removed) {
                 changed.accept(level, sectionBounds(section));
             }
         }
@@ -268,11 +282,25 @@ public final class LightField {
         int sample(BlockPos pos) {
             return field.sample(pos, entries, revision);
         }
+
+        Snapshot tile(AABB box) {
+            List<Entry> candidates = new ArrayList<>();
+            for (Entry entry : entries) {
+                if (entry.beam.intersects(box.minX, box.minY, box.minZ, box.maxX, box.maxY, box.maxZ,
+                        field.visibility.range(entry.source, entry.beam)) && !field.visibility.hidden(entry.source, entry.beam, box)) candidates.add(entry);
+            }
+            return new Snapshot(field, List.copyOf(candidates), revision);
+        }
     }
 
     static Snapshot snapshot(Level level, long section) {
         Field field = field(level, false);
         return field == null ? null : field.snapshot(section);
+    }
+
+    static boolean affects(Level level, long section) {
+        Field field = field(level, false);
+        return field != null && field.affects(section);
     }
 
     static List<Entry> entries(Level level, long chunk) {
@@ -287,13 +315,18 @@ public final class LightField {
     @FunctionalInterface
     interface Visibility {
         boolean visible(BlockPos source, Beam beam, BlockPos target);
+        default double range(BlockPos source, Beam beam) { return beam.range; }
+        default boolean hidden(BlockPos source, Beam beam, AABB box) { return false; }
+        default void invalidate(BlockPos pos) { }
+        default void invalidateChunk(int x, int z) { }
     }
 
     /** Immutable chunk lists make cache misses safe while fixtures change on the level thread. */
     static final class Field {
         final Long2ObjectOpenHashMap<Entry> fixtures = new Long2ObjectOpenHashMap<>();
-        final Long2ObjectOpenHashMap<List<Entry>> chunks = new Long2ObjectOpenHashMap<>();
+        final Long2ObjectOpenHashMap<ChunkEntries> chunks = new Long2ObjectOpenHashMap<>();
         final Long2ObjectLinkedOpenHashMap<CachedSection> sections = new Long2ObjectLinkedOpenHashMap<>();
+        final Long2ObjectLinkedOpenHashMap<Snapshot> snapshots = new Long2ObjectLinkedOpenHashMap<>();
         final Visibility visibility;
         volatile long revision;
 
@@ -306,7 +339,18 @@ public final class LightField {
         }
 
         synchronized List<Entry> chunkEntries(long chunk) {
-            return chunks.getOrDefault(chunk, List.of());
+            ChunkEntries known = chunks.get(chunk);
+            if (known == null) return List.of();
+            if (known.revision != revision) {
+                List<Entry> current = new ArrayList<>(known.entries.size());
+                for (Entry old : known.entries) {
+                    Entry entry = fixtures.get(old.source.asLong());
+                    if (entry != null) current.add(entry);
+                }
+                known.entries = List.copyOf(current);
+                known.revision = revision;
+            }
+            return known.entries;
         }
 
         synchronized Change update(BlockPos source, Beam beam) {
@@ -325,12 +369,12 @@ public final class LightField {
                 fixtures.remove(id);
             } else {
                 fixtures.put(id, next);
-                index(next, true);
+                if (!weightsOnly) index(next, true);
             }
             for (var cached : sections.long2ObjectEntrySet()) {
                 if (sectionIntersects(cached.getLongKey(), affected)) {
-                    Arrays.fill(cached.getValue().levels, (byte) -1);
-                    if (!weightsOnly) {
+                    cached.getValue().dirty = true;
+                    if (before == null || next == null || !before.beam.origin.equals(next.beam.origin)) {
                         cached.getValue().visibility.remove(id);
                     }
                 }
@@ -347,8 +391,8 @@ public final class LightField {
                         continue;
                     }
                     long key = ChunkPos.asLong(x, z);
-                    List<Entry> old = chunks.get(key);
-                    List<Entry> list = old == null ? new ArrayList<>() : new ArrayList<>(old);
+                    ChunkEntries old = chunks.get(key);
+                    List<Entry> list = old == null ? new ArrayList<>() : new ArrayList<>(old.entries);
                     list.removeIf(e -> e.source.equals(entry.source));
                     if (add) {
                         list.add(entry);
@@ -356,7 +400,7 @@ public final class LightField {
                     if (list.isEmpty()) {
                         chunks.remove(key);
                     } else {
-                        chunks.put(key, List.copyOf(list));
+                        chunks.put(key, new ChunkEntries(List.copyOf(list)));
                     }
                 }
             }
@@ -367,7 +411,27 @@ public final class LightField {
         }
 
         synchronized Snapshot snapshot(long section) {
-            return new Snapshot(this, chunkEntries(ChunkPos.asLong(SectionPos.x(section), SectionPos.z(section))), revision);
+            Snapshot known = snapshots.getAndMoveToLast(section);
+            if (known != null && known.revision == revision) return known;
+            List<Entry> candidates = new ArrayList<>();
+            for (Entry entry : chunkEntries(ChunkPos.asLong(SectionPos.x(section), SectionPos.z(section)))) {
+                if (entry.beam.intersectsSection(section)
+                        && entry.beam.intersectsSection(section, visibility.range(entry.source, entry.beam))
+                        && !visibility.hidden(entry.source, entry.beam, sectionBounds(section))) candidates.add(entry);
+            }
+            Snapshot snapshot = new Snapshot(this, List.copyOf(candidates), revision);
+            if (known == null && snapshots.size() >= 1024) snapshots.removeFirst();
+            snapshots.put(section, snapshot);
+            return snapshot;
+        }
+
+        synchronized boolean affects(long section) {
+            for (Entry entry : chunkEntries(ChunkPos.asLong(SectionPos.x(section), SectionPos.z(section)))) {
+                if (entry.beam.intersectsSection(section)
+                        && entry.beam.intersectsSection(section, visibility.range(entry.source, entry.beam))
+                        && !visibility.hidden(entry.source, entry.beam, sectionBounds(section))) return true;
+            }
+            return false;
         }
 
         int sample(BlockPos pos, List<Entry> entries, long version) {
@@ -376,7 +440,7 @@ public final class LightField {
             CachedSection cached;
             synchronized (this) {
                 if (entries == null) {
-                    entries = chunkEntries(ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4));
+                    entries = snapshot(section).entries;
                     version = revision;
                 }
                 if (entries.isEmpty()) {
@@ -389,9 +453,12 @@ public final class LightField {
                     }
                     cached = new CachedSection();
                     sections.put(section, cached);
-                } else if (version == revision && cached.levels[index] >= 0) {
-                    return cached.levels[index];
                 }
+                if (cached.dirty) {
+                    Arrays.fill(cached.levels, (byte) -1);
+                    cached.dirty = false;
+                }
+                if (version == revision && cached.levels[index] >= 0) return cached.levels[index];
             }
             double sum = 0;
             for (Entry entry : entries) {
@@ -418,9 +485,9 @@ public final class LightField {
             long bit = 1L << index;
             synchronized (this) {
                 Entry current = fixtures.get(entry.source.asLong());
-                if (sections.get(section) == cached && current != null && current.beam.sameGeometry(entry.beam)) {
+                if (sections.get(section) == cached && current != null && current.beam.origin.equals(entry.beam.origin)) {
                     mask = cached.visibility.get(entry.source.asLong());
-                    if (mask != null && !mask.beam.sameGeometry(entry.beam)) {
+                    if (mask != null && !mask.beam.origin.equals(entry.beam.origin)) {
                         cached.visibility.remove(entry.source.asLong());
                         mask = null;
                     }
@@ -448,18 +515,23 @@ public final class LightField {
         }
 
         synchronized List<Long> invalidate(BlockPos pos) {
-            return forgetBeams(chunks.get(ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4)), pos);
+            visibility.invalidate(pos);
+            return forgetBeams(chunkEntries(ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4)), pos, null);
         }
 
         synchronized List<Long> invalidateChunk(int x, int z) {
-            return forgetBeams(chunks.get(ChunkPos.asLong(x, z)), null);
+            visibility.invalidateChunk(x, z);
+            return forgetBeams(chunkEntries(ChunkPos.asLong(x, z)), null,
+                    new AABB(x * 16.0, -1e9, z * 16.0, x * 16.0 + 16, 1e9, z * 16.0 + 16));
         }
 
-        private List<Long> forgetBeams(List<Entry> candidates, BlockPos obstruction) {
+        private List<Long> forgetBeams(List<Entry> candidates, BlockPos obstruction, AABB chunk) {
             List<Long> removed = new ArrayList<>();
             if (candidates != null) {
                 for (Entry entry : candidates) {
-                    if (obstruction == null || entry.beam.intersectsBlock(obstruction)) {
+                    double extent = visibility.range(entry.source, entry.beam);
+                    if ((obstruction == null ? entry.beam.bounds(extent).intersects(chunk) : entry.beam.intersectsBlock(obstruction, extent))
+                            && !visibility.hidden(entry.source, entry.beam, obstruction == null ? chunk : new AABB(obstruction))) {
                         removed.addAll(forget(entry.bounds));
                         revision++;
                     }
@@ -485,7 +557,14 @@ public final class LightField {
         }
     }
 
+    private static final class ChunkEntries {
+        List<Entry> entries;
+        long revision = -1;
+        ChunkEntries(List<Entry> entries) { this.entries = entries; }
+    }
+
     static final class CachedSection {
+        boolean dirty;
         final byte[] levels = new byte[4096];
         final Long2ObjectOpenHashMap<VisibilityMask> visibility = new Long2ObjectOpenHashMap<>();
 
@@ -514,22 +593,4 @@ public final class LightField {
         return new AABB(x, y, z, x + 16, y + 16, z + 16);
     }
 
-    /** Vanilla transmission flags, not entity collision: bars/fences do not cast their tall collision proxy. */
-    private static boolean visible(Level level, BlockPos source, Vec3 from, Vec3 to) {
-        return BlockGetter.traverseBlocks(from, to, level, (world, pos) -> {
-            if (pos.equals(source) || world.isOutsideBuildHeight(pos)) {
-                return null;
-            }
-            var chunk = world.getChunkSource().getChunkForLighting(pos.getX() >> 4, pos.getZ() >> 4);
-            if (chunk == null) {
-                return Shapes.block().clip(from, to, pos);
-            }
-            BlockState state = chunk.getBlockState(pos);
-            if (state.getLightBlock(world, pos) < 15 && !state.useShapeForLightOcclusion()) {
-                return null;
-            }
-            return (state.useShapeForLightOcclusion() ? state.getOcclusionShape(world, pos) : Shapes.block())
-                    .clip(from, to, pos);
-        }, world -> null) == null;
-    }
 }

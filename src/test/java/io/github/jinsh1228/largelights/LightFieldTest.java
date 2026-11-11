@@ -270,4 +270,38 @@ class LightFieldTest {
         assertEquals(0, field.sample(target));
         assertEquals(2, traces.get());
     }
+
+    @Test
+    void tileCandidatesPreserveTheCompletePointSampleAcrossMixedBeams() {
+        Random random = new Random(5512);
+        LightField.Field field = new LightField.Field((source, beam, target) -> true);
+        for (int i = 0; i < 32; i++) {
+            field.update(new BlockPos(i, 80, 0), new LightField.Beam(
+                    new Vec3(random.nextDouble() * 30 - 15, 40, random.nextDouble() * 30 - 15),
+                    new Vec3(random.nextDouble() - .5, -1, random.nextDouble() - .5),
+                    .01 + random.nextDouble(), 128, .1, 15, 48));
+        }
+        long section = SectionPos.asLong(0, 1, 0);
+        var snapshot = field.snapshot(section);
+        for (int y = 16; y < 32; y += 4) for (int z = 0; z < 16; z += 4) for (int x = 0; x < 16; x += 4) {
+            var tile = snapshot.tile(new AABB(x, y, z, x + 4, y + 4, z + 4));
+            for (BlockPos pos : BlockPos.betweenClosed(x, y, z, x + 3, y + 3, z + 3)) {
+                int expected = LightField.level(snapshot.entries().stream().mapToDouble(entry -> entry.beam().contribution(pos.getCenter())).sum());
+                assertEquals(expected, tile.sample(pos));
+            }
+        }
+    }
+
+    @Test
+    void rangeAndSpreadChangesReuseTheSameSourceToCellVisibility() {
+        AtomicInteger traces = new AtomicInteger();
+        LightField.Field field = new LightField.Field((source, beam, target) -> { traces.incrementAndGet(); return true; });
+        LightField.Beam first = beam(6);
+        BlockPos point = new BlockPos(0, 0, 8);
+        field.update(BlockPos.ZERO, first);
+        assertEquals(6, field.sample(point));
+        field.update(BlockPos.ZERO, new LightField.Beam(first.origin(), first.direction(), .8, 256, 1, 6, 48));
+        assertEquals(6, field.sample(point));
+        assertEquals(1, traces.get());
+    }
 }

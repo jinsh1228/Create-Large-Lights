@@ -20,8 +20,11 @@ import com.mojang.blaze3d.systems.RenderSystem;
 
 import io.github.jinsh1228.largelights.mixin.MultipartModelAccessor;
 import io.github.jinsh1228.largelights.mixin.WeightedModelAccessor;
+import io.github.jinsh1228.largelights.LightField;
+import io.github.jinsh1228.largelights.LightReach;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
+import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -209,13 +212,22 @@ public final class GpuLightGeometry {
             entry.failed = false;
         }
         int x = SectionPos.x(key), y = SectionPos.y(key), z = SectionPos.z(key);
+        cache.invalidateOpaque(x, y, z);
+        AABB area = new AABB(x * 16.0 - 2, y * 16.0 - 2, z * 16.0 - 2,
+                x * 16.0 + 18, y * 16.0 + 18, z * 16.0 + 18);
+        cache.reach.invalidate(area);
         cache.memberships.entrySet().removeIf(member -> (entry == null || !member.getValue().entries.contains(entry))
-                && Cache.intersects(member.getKey(), x, y, z));
+                && Cache.intersects(member.getKey(), x, y, z) && !cache.hidden(member.getKey(), area));
         cache.epoch++;
     }
 
     public static void chunkChanged(int x, int z) {
         if (cache == null) return;
+        cache.opaqueKey = Long.MIN_VALUE;
+        cache.opaqueMask = null;
+        cache.opaqueSections.keySet().removeIf((java.util.function.LongPredicate) key -> Math.abs(SectionPos.x(key) - x) <= 1
+                && Math.abs(SectionPos.z(key) - z) <= 1);
+        cache.reach.invalidate(new AABB(x * 16.0 - 1, -1e9, z * 16.0 - 1, x * 16.0 + 17, 1e9, z * 16.0 + 17));
         for (Entry entry : cache.sections.values()) {
             if (Math.abs(SectionPos.x(entry.key) - x) <= 1 && Math.abs(SectionPos.z(entry.key) - z) <= 1) {
                 entry.generation++;
@@ -238,6 +250,9 @@ public final class GpuLightGeometry {
             // The engine calls rebuild before selecting, so a world switch is handled there.
             return PENDING;
         }
+        LightField.Beam beam = new LightField.Beam(origin, direction, tangent, range, 1, 15, radius);
+        bounds = cache.reach.bounds(BlockPos.containing(origin), beam, 2);
+        range = cache.reach.limit(BlockPos.containing(origin), beam);
         Query query = new Query(bounds, origin, direction, tangent, range, radius);
         Membership membership = cache.memberships.get(query);
         if (membership == null) {
@@ -335,6 +350,11 @@ public final class GpuLightGeometry {
         final Map<Query, Membership> memberships = new LinkedHashMap<>();
         final Map<BakedModel, Boolean> culledModels = new IdentityHashMap<>();
         final Map<BlockState, Boolean> fullStates = new HashMap<>();
+        final Map<BlockState, Boolean> opaqueStates = new HashMap<>();
+        final LightReach reach = new LightReach(this::opaque);
+        final Long2ObjectLinkedOpenHashMap<long[]> opaqueSections = new Long2ObjectLinkedOpenHashMap<>();
+        long opaqueKey = Long.MIN_VALUE;
+        long[] opaqueMask;
         final ArrayDeque<Entry> pending = new ArrayDeque<>();
         final Mesh unknown = new Mesh(BlockPos.ZERO, false);
         long frame = Long.MIN_VALUE, bytes, epoch;
@@ -357,6 +377,8 @@ public final class GpuLightGeometry {
 
         private Membership find(Query query) {
             AABB bounds = query.bounds;
+            LightField.Beam beam = new LightField.Beam(query.origin, query.direction, query.tangent, query.range, 1, 15, query.radius);
+            BlockPos source = BlockPos.containing(query.origin);
             int minX = SectionPos.blockToSectionCoord((int) Math.floor(bounds.minX));
             int maxX = SectionPos.blockToSectionCoord((int) Math.floor(bounds.maxX));
             int minZ = SectionPos.blockToSectionCoord((int) Math.floor(bounds.minZ));
@@ -372,6 +394,8 @@ public final class GpuLightGeometry {
                     boolean intersects = false;
                     for (int y = minY; y <= maxY; y++) {
                         if (!intersects(query, x, y, z)) continue;
+                        if (reach.hidden(source, beam, new AABB(x * 16.0 - 2, y * 16.0 - 2, z * 16.0 - 2,
+                                x * 16.0 + 18, y * 16.0 + 18, z * 16.0 + 18))) continue;
                         intersects = true;
                         if (chunk == null || chunk.getSection(y - level.getMinSection()).hasOnlyAir()) continue;
                         long key = SectionPos.asLong(x, y, z);
@@ -518,6 +542,90 @@ public final class GpuLightGeometry {
             if (fullStates.size() >= 8192) fullStates.clear();
             fullStates.put(state, full);
             return full;
+        }
+
+        private boolean hidden(Query query, AABB area) {
+            return reach.hidden(BlockPos.containing(query.origin),
+                    new LightField.Beam(query.origin, query.direction, query.tangent, query.range, 1, 15, query.radius), area);
+        }
+
+        private void invalidateOpaque(int x, int y, int z) {
+            opaqueKey = Long.MIN_VALUE;
+            opaqueMask = null;
+            for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) for (int dz = -1; dz <= 1; dz++)
+                opaqueSections.remove(SectionPos.asLong(x + dx, y + dy, z + dz));
+        }
+
+        private boolean opaque(BlockPos pos) {
+            if (level.isOutsideBuildHeight(pos)) return false;
+            long key = SectionPos.asLong(pos);
+            if (key != opaqueKey) {
+                opaqueMask = opaqueSections.getAndMoveToLast(key);
+                if (opaqueMask == null) {
+                    if (opaqueSections.size() >= 512) opaqueSections.removeFirst();
+                    opaqueMask = new long[128];
+                    opaqueSections.put(key, opaqueMask);
+                }
+                opaqueKey = key;
+            }
+            int cell = (pos.getY() & 15) << 8 | (pos.getZ() & 15) << 4 | pos.getX() & 15, word = cell >> 6;
+            long bit = 1L << cell;
+            if ((opaqueMask[word] & bit) == 0) {
+                boolean full = opaqueModel(pos);
+                opaqueMask[word] |= bit;
+                if (full) opaqueMask[word + 64] |= bit;
+            }
+            return (opaqueMask[word + 64] & bit) != 0;
+        }
+
+        /** Only proven unit-cube models with no transparent texels may close the work volume. */
+        private boolean opaqueModel(BlockPos pos) {
+            if (level.isOutsideBuildHeight(pos)) return false;
+            LevelChunk chunk = chunk(pos.getX() >> 4, pos.getZ() >> 4);
+            if (chunk == null) return false;
+            BlockState state = chunk.getBlockState(pos);
+            if (state.hasBlockEntity() || state.getBlock().hasDynamicShape()
+                    || !state.isSolidRender(level, pos) || !state.isCollisionShapeFullBlock(level, pos)
+                    || state.getOffset(level, pos).lengthSqr() != 0) return false;
+            Boolean known = opaqueStates.get(state);
+            if (known != null) return known;
+            BakedModel model = Minecraft.getInstance().getBlockRenderer().getBlockModel(state);
+            boolean opaque = model.getClass() == SimpleBakedModel.class;
+            RandomSource random = RandomSource.create(42);
+            for (Direction side : DIRECTIONS) {
+                if (!opaque) break;
+                opaque = model.getQuads(state, side, random).stream().anyMatch(quad -> fullFace(quad, side));
+            }
+            if (opaqueStates.size() >= 8192) opaqueStates.clear();
+            opaqueStates.put(state, opaque);
+            return opaque;
+        }
+
+        private static boolean fullFace(BakedQuad quad, Direction side) {
+            int axis = side.getAxis().ordinal(), a = (axis + 1) % 3, b = (axis + 2) % 3, corners = 0, order = 0;
+            int[] data = quad.getVertices();
+            float plane = side.getAxisDirection() == Direction.AxisDirection.POSITIVE ? 1 : 0;
+            for (int vertex = 0; vertex < 4; vertex++) {
+                int base = vertex * IQuadTransformer.STRIDE + IQuadTransformer.POSITION;
+                if (Float.intBitsToFloat(data[base + axis]) != plane) return false;
+                float u = Float.intBitsToFloat(data[base + a]), v = Float.intBitsToFloat(data[base + b]);
+                if (u != 0 && u != 1 || v != 0 && v != 1) return false;
+                int corner = (int) u | (int) v << 1;
+                corners |= 1 << corner;
+                order |= corner << (vertex * 2);
+            }
+            if (corners != 15 || ((order ^ order >> 4) & 3) != 3 || ((order >> 2 ^ order >> 6) & 3) != 3) return false;
+            var sprite = quad.getSprite();
+            for (int vertex = 0; vertex < 4; vertex++) {
+                int base = vertex * IQuadTransformer.STRIDE + IQuadTransformer.UV0;
+                float u = Float.intBitsToFloat(data[base]), v = Float.intBitsToFloat(data[base + 1]);
+                if (u < sprite.getU0() || u > sprite.getU1() || v < sprite.getV0() || v > sprite.getV1()) return false;
+            }
+            for (int frame : sprite.contents().getUniqueFrames().toArray())
+                for (int y = 0; y < sprite.contents().height(); y++)
+                    for (int x = 0; x < sprite.contents().width(); x++)
+                        if (sprite.getPixelRGBA(frame, x, y) >>> 24 < 26) return false;
+            return true;
         }
 
         private boolean culled(BakedModel model) {

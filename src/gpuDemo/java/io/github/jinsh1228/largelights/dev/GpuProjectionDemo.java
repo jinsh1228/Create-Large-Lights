@@ -34,6 +34,7 @@ import com.simibubi.create.content.decoration.copycat.CopycatBlockEntity;
 import io.github.jinsh1228.largelights.Aim;
 import io.github.jinsh1228.largelights.CreateLargeLights;
 import io.github.jinsh1228.largelights.FloodlightBlock;
+import io.github.jinsh1228.largelights.LightFieldNetwork;
 import io.github.jinsh1228.largelights.ConsoleSettings;
 import io.github.jinsh1228.largelights.client.GpuLightProjection;
 import io.github.jinsh1228.largelights.client.GpuLightGeometry;
@@ -77,7 +78,8 @@ public final class GpuProjectionDemo {
     private static final boolean GPU = "gpu".equals(MODE);
     private static final int SIZE = Math.max(256, Math.min(4096, Integer.getInteger("createLargeLights.gpuDemo.shadowSize", 1024)));
     private static final int LIGHT_COUNT = Math.max(1, Math.min(PERFORMANCE ? 128 : 16, Integer.getInteger("createLargeLights.gpuDemo.lightCount", 1)));
-    private static final BlockPos LAMP = new BlockPos(0, FLOOR + (PERFORMANCE ? 60 : 24), vertical() ? 5 : -10);
+    private static final int RANGE = Integer.getInteger("createLargeLights.gpuDemo.range", PERFORMANCE ? 128 : 64);
+    private static final BlockPos LAMP = new BlockPos(0, FLOOR + Integer.getInteger("createLargeLights.gpuDemo.height", PERFORMANCE ? 60 : 24), vertical() ? 5 : -10);
     private static final List<BlockPos> LAMPS = lampPositions();
     private static final BlockPos SECOND_CONSOLE = new BlockPos(32, FLOOR + 1, 24);
     private static final List<Projector> projectors = new ArrayList<>();
@@ -160,6 +162,10 @@ public final class GpuProjectionDemo {
         }
         if (mc.level == null || mc.getSingleplayerServer() == null) return;
         ticks++;
+        if (PERFORMANCE && linked && ticks % 100 == 0) {
+            mc.getSingleplayerServer().execute(() -> LogUtils.getLogger().info("PERF_FIELD ticks={} range={} server_tick_mean_ms={} metrics={}",
+                    ticks, RANGE, mc.getSingleplayerServer().getAverageTickTimeNanos() / 1e6, LightFieldNetwork.metrics(mc.getSingleplayerServer().overworld())));
+        }
         if (ticks == 40) {
             mc.getSingleplayerServer().execute(() -> longRows(mc.getSingleplayerServer().overworld()));
         } else if (ticks >= 160 && ticks % 20 == 0 && !linked) {
@@ -169,7 +175,7 @@ public final class GpuProjectionDemo {
 
     private static boolean configured(FloodlightBlock.Entity.Beam beam) {
         return beam.console() != null && beam.group() != null && beam.strength() == 1
-                && beam.range() == (PERFORMANCE ? 128 : 64) && beam.spread() == 80 && beam.group().colors[0] == 0x55CCFF;
+                && beam.range() == RANGE && beam.spread() == 80 && beam.group().colors[0] == 0x55CCFF;
     }
 
     private static void link(ServerLevel level) {
@@ -181,7 +187,7 @@ public final class GpuProjectionDemo {
             second.settings.enabled = true;
             second.settings.master = 1;
             var group = second.settings.groups[0];
-            group.brightness = 1; group.range = 128; group.pan = 0; group.tilt = Aim.NEUTRAL_TILT;
+            group.brightness = 1; group.range = RANGE; group.pan = 0; group.tilt = Aim.NEUTRAL_TILT;
             group.motion = org.haruyq.createmediasystems.lighting.LightingSettings.byId(org.haruyq.createmediasystems.lighting.LightingSettings.Motion.values(), Integer.getInteger("createLargeLights.gpuDemo.motion", 0));
             group.colorCount = 1; group.colors[0] = 0x55CCFF;
             ConsoleSettings.setSpread(second, 0, 80);
@@ -211,7 +217,7 @@ public final class GpuProjectionDemo {
             signature = 31 * signature + Float.floatToIntBits(beam.pitch());
         }
         LogUtils.getLogger().info("GPU_TRIAL_CONFIG mode={} angle={} lights={} signature={} strength=1 spread=80 range={} color=55CCFF all_fixtures_verified=true",
-                MODE, vertical() ? "vertical" : "oblique", LIGHT_COUNT, signature, PERFORMANCE ? 128 : 64);
+                MODE, vertical() ? "vertical" : "oblique", LIGHT_COUNT, signature, RANGE);
         return true;
     }
 

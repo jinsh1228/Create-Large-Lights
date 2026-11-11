@@ -5,6 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.Arrays;
+import java.util.Random;
 import java.util.stream.Stream;
 
 import com.mojang.logging.LogUtils;
@@ -30,6 +31,7 @@ import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
 import net.minecraft.world.level.LevelAccessor;
+import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.WorldDataConfiguration;
 import net.minecraft.world.level.block.Block;
@@ -45,6 +47,7 @@ import net.minecraft.world.level.levelgen.WorldOptions;
 import net.minecraft.world.level.levelgen.presets.WorldPresets;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.shapes.Shapes;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -69,7 +72,7 @@ public final class ShapeLightingDemo {
     private static final boolean PERFORMANCE = Boolean.getBoolean("createLargeLights.gpuDemo.performance");
     private static final boolean FIELD_DEMO = Boolean.getBoolean("createLargeLights.fieldDemo");
     private static final boolean VERTICAL = "vertical".equals(System.getProperty("createLargeLights.gpuDemo.angle", "oblique"));
-    private static final BlockPos LIGHT = new BlockPos(0, FLOOR + (PERFORMANCE ? 60 : GPU_TRIAL ? 24 : 8), GPU_TRIAL && VERTICAL ? 5 : -10);
+    private static final BlockPos LIGHT = new BlockPos(0, FLOOR + Integer.getInteger("createLargeLights.gpuDemo.height", PERFORMANCE ? 60 : GPU_TRIAL ? 24 : 8), GPU_TRIAL && VERTICAL ? 5 : -10);
     private static final BlockPos CONSOLE = new BlockPos(16, FLOOR + 1, -9);
     private static final BlockPos FIELD_TEST = new BlockPos(0, FLOOR + 40, 0);
     private static final BlockPos VANILLA_TEST = FIELD_TEST.offset(0, 0, -24);
@@ -87,7 +90,7 @@ public final class ShapeLightingDemo {
     private static int syncPhase;
     private static int syncChangedAt;
 
-    private record FieldSample(boolean enabled, int[] field, int[] block) {
+    private record FieldSample(boolean enabled, int[] field, int[] block, int[] section) {
     }
 
     private ShapeLightingDemo() {
@@ -307,7 +310,7 @@ public final class ShapeLightingDemo {
         console.settings.enabled = true;
         var group = console.settings.groups[0];
         group.brightness = 1;
-        group.range = PERFORMANCE ? 128 : 64;
+        group.range = Integer.getInteger("createLargeLights.gpuDemo.range", PERFORMANCE ? 128 : 64);
         group.pan = 0;
         group.tilt = Aim.NEUTRAL_TILT;
         group.motion = org.haruyq.createmediasystems.lighting.LightingSettings.byId(org.haruyq.createmediasystems.lighting.LightingSettings.Motion.values(), PERFORMANCE ? Integer.getInteger("createLargeLights.gpuDemo.motion", 0) : 0);
@@ -382,6 +385,21 @@ public final class ShapeLightingDemo {
                 check(level.getBrightness(LightLayer.BLOCK, target) == 6,
                         "common block light transmits through " + transparent);
             }
+            Random random = new Random(614);
+            for (BlockState shape : new BlockState[]{Blocks.STONE.defaultBlockState(), Blocks.SMOOTH_STONE_SLAB.defaultBlockState(),
+                    Blocks.SMOOTH_STONE_SLAB.defaultBlockState().setValue(SlabBlock.TYPE, SlabType.TOP),
+                    Blocks.QUARTZ_STAIRS.defaultBlockState(), Blocks.IRON_BARS.defaultBlockState(), Blocks.OAK_FENCE.defaultBlockState()}) {
+                level.setBlock(obstruction, shape, Block.UPDATE_ALL);
+                boolean matches = true;
+                for (int i = 0; i < 500; i++) {
+                    BlockPos sample = FIELD_TEST.offset(random.nextInt(11) - 5, random.nextInt(9) - 4, 2 + random.nextInt(30));
+                    double value = beam.contribution(sample.getCenter());
+                    int expected = value > 0 && referenceVisible(level, FIELD_TEST, origin, sample.getCenter())
+                            ? Math.max(1, Math.min(15, (int) Math.round(value))) : 0;
+                    matches &= LightField.sample(level, sample) == expected;
+                }
+                check(matches, "cached transmission matches 500 original ray samples for " + shape);
+            }
             level.setBlock(obstruction, previous, Block.UPDATE_ALL);
             check(level.getBrightness(LightLayer.BLOCK, target) == 6, "removing the obstruction restores cached light");
             LightField.remove(level, FIELD_TEST);
@@ -398,6 +416,17 @@ public final class ShapeLightingDemo {
             level.setBlock(obstruction, previous, Block.UPDATE_ALL);
             level.setBlock(VANILLA_TEST, vanillaTestState, Block.UPDATE_ALL);
         }
+    }
+
+    private static boolean referenceVisible(ServerLevel level, BlockPos source, Vec3 from, Vec3 to) {
+        return BlockGetter.traverseBlocks(from, to, level, (world, pos) -> {
+            if (pos.equals(source) || world.isOutsideBuildHeight(pos)) return null;
+            var chunk = world.getChunkSource().getChunkForLighting(pos.getX() >> 4, pos.getZ() >> 4);
+            if (chunk == null) return Shapes.block().clip(from, to, pos);
+            BlockState state = chunk.getBlockState(pos);
+            if (state.getLightBlock(world, pos) < 15 && !state.useShapeForLightOcclusion()) return null;
+            return (state.useShapeForLightOcclusion() ? state.getOcclusionShape(world, pos) : Shapes.block()).clip(from, to, pos);
+        }, world -> null) == null;
     }
 
     /** Wait for the actual fixture's subscribed sections, then verify that switching it off clears the client. */
@@ -452,6 +481,12 @@ public final class ShapeLightingDemo {
                         + "; field=" + Arrays.toString(field) + ", expected=" + Arrays.toString(expected.field)
                         + ", block=" + Arrays.toString(block) + ", waited=" + waited + " ticks");
         checkSectionLight(mc, expected.block);
+        BlockPos base = SectionPos.of(SYNC_POINTS[0]).origin();
+        boolean complete = true;
+        for (int i = 0; i < 4096; i++) {
+            complete &= LightField.sample(mc.level, base.offset(i & 15, i >> 8, i >> 4 & 15)) == expected.section[i];
+        }
+        check(complete, "all 4096 synchronized cells match server light after " + (expected.enabled ? "activation" : "switch-off"));
         server.execute(() -> LogUtils.getLogger().info("SHAPE FIELD SYNC metrics {}",
                 LightFieldNetwork.metrics(server.overworld())));
         if (expected.enabled) {
@@ -505,7 +540,10 @@ public final class ShapeLightingDemo {
                         + "; field=" + Arrays.toString(field));
         LogUtils.getLogger().info("SHAPE FIELD SYNC server enabled={}, field={}, block={}, metrics={}",
                 enabled, Arrays.toString(field), Arrays.toString(block), LightFieldNetwork.metrics(level));
-        fieldSample = new FieldSample(enabled, field, block);
+        int[] section = new int[4096];
+        BlockPos base = SectionPos.of(SYNC_POINTS[0]).origin();
+        for (int i = 0; i < 4096; i++) section[i] = LightField.sample(level, base.offset(i & 15, i >> 8, i >> 4 & 15));
+        fieldSample = new FieldSample(enabled, field, block, section);
     }
 
     /** Exercise the installed CMS mixin against the actual baked models and their texture alpha. */

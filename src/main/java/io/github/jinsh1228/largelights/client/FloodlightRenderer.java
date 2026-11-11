@@ -181,17 +181,17 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         Vec3 right = vector(local, new Vec3(1, 0, 0)).normalize();
         Vec3 up = vector(local, new Vec3(0, 1, 0)).normalize();
         double halfAngle = Math.toRadians(beam.spread()) / 2;
-        LightingRaycast rays = LightingRaycast.rendered(level, lamp.getBlockPos());
         if (!(lamp.renderTrace instanceof Trace)) {
             lamp.renderTrace = new Trace();
         }
         Trace trace = (Trace) lamp.renderTrace;
-        trace.update(lamp, rays, origin, direction, right, up, Math.tan(halfAngle), beam.range());
+        LightingRaycast rays = trace.update(lamp, origin, direction, right, up, Math.tan(halfAngle), beam.range());
         MultiBufferSource effects = LightingRenderer.beamBuffers(level, buffers);
         boolean realLight = FloodlightConfig.SPEC.isLoaded() && FloodlightConfig.REAL_LIGHT.get();
         float surfaceStrength = strength * overlay(kind, realLight, beam.lightLimit());
         if (!GpuLightProjection.queue(lamp, origin, direction, up, halfAngle, beam.range(),
                 surfaceStrength, color, kind.radius)) {
+            if (rays == null) rays = LightingRaycast.rendered(level, lamp.getBlockPos());
             LightingIllumination.render(lamp, origin, direction, halfAngle, beam.range(), surfaceStrength, color,
                     trace.center, rays, model, effects, kind.radius);
         }
@@ -289,6 +289,8 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         final double[] edges = new double[EDGES * 3];
         final double[] lengths = new double[EDGES];
         long traced = -2;
+        long blocks = -1;
+        AABB bounds;
         /** Where the beam left from in the world: it moves with a Sable structure the floodlight is on. */
         Vec3 lastFrom;
         Vec3 lastOrigin;
@@ -301,7 +303,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
                     && tangent == lastTangent && range == lastRange;
         }
 
-        void update(FloodlightBlock.Entity lamp, LightingRaycast rays, Vec3 origin, Vec3 direction, Vec3 right,
+        LightingRaycast update(FloodlightBlock.Entity lamp, Vec3 origin, Vec3 direction, Vec3 right,
                     Vec3 up, double tangent, float range) {
             long frame = LightingIllumination.frame();
             Level level = lamp.getLevel();
@@ -309,18 +311,19 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
             Vec3 from = SableCompat.toRenderWorld(level, lamp.getBlockPos(), origin.add(anchor));
             // Off the world (a Ponder scene), every frame; in it, again when a block changes or the light moves.
             boolean still = center != null && frame - traced <= 1 && level == Minecraft.getInstance().level
-                    && !LightingIllumination.blocksChanged() && sameBeam(from, origin, direction, tangent, range);
+                    && bounds != null && blocks == LightModelSnapshots.watch(this, bounds)
+                    && GpuProjectionLifecycle.staticGeometry(level, bounds) && sameBeam(from, origin, direction, tangent, range);
             traced = frame;
-            if (still) {
-                return;
-            }
+            if (still) return null;
             lastFrom = from;
             lastOrigin = origin;
             lastDirection = direction;
             lastTangent = tangent;
             lastRange = range;
+            LightingRaycast rays = LightingRaycast.rendered(level, lamp.getBlockPos());
             center = rays.clip(from, SableCompat.toRenderWorld(level, lamp.getBlockPos(),
                     origin.add(direction.scale(range)).add(anchor)));
+            bounds = new AABB(from, center.point());
             for (int i = 0; i < EDGES; i++) {
                 Vec3 aim = direction.add(right.scale(COS[i] * tangent)).add(up.scale(SIN[i] * tangent)).normalize();
                 edges[i * 3] = aim.x;
@@ -328,10 +331,14 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
                 edges[i * 3 + 2] = aim.z;
                 LightingRaycast.Hit hit = rays.clip(from, SableCompat.toRenderWorld(level, lamp.getBlockPos(),
                         origin.add(aim.scale(range)).add(anchor)));
+                bounds = bounds.minmax(new AABB(from, hit.point()));
                 lengths[i] = hit.block().getType() == HitResult.Type.BLOCK
                         ? SableCompat.toRenderBlockSpace(level, lamp.getBlockPos(), hit.point()).subtract(anchor)
                         .distanceTo(origin) : range;
             }
+            bounds = bounds.inflate(2);
+            blocks = LightModelSnapshots.watch(this, bounds);
+            return rays;
         }
     }
 
