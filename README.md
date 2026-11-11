@@ -2,6 +2,8 @@
 
 体育館・アリーナ・スタジアム向けの「投光器」を追加する [Create: Media Systems](https://github.com/haruyq/Create-Media-Systems) のアドオンです。
 
+ビルド済みJAR: [create_large_lights-0.1.0.jar](releases/create_large_lights-0.1.0.jar)。対応するCMSのコミットは下の「ビルド」を参照してください。
+
 バニラの光源は半径15ブロックまでしか届かないため、高い天井から床を照らすことができません。
 CLLの投光器は、ブロックの実モデルとテクスチャの透明部分に合わせて、独自のGPU描画で光と影を重ねます。
 単体で**最大256ブロック先**まで届き、**最大で直径約100ブロック**の床を照らします。
