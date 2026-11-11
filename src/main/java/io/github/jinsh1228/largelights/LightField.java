@@ -3,13 +3,13 @@ package io.github.jinsh1228.largelights;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
 import java.util.function.BiConsumer;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
@@ -293,7 +293,7 @@ public final class LightField {
     static final class Field {
         final Long2ObjectOpenHashMap<Entry> fixtures = new Long2ObjectOpenHashMap<>();
         final Long2ObjectOpenHashMap<List<Entry>> chunks = new Long2ObjectOpenHashMap<>();
-        final Map<Long, CachedSection> sections = new LinkedHashMap<>(32, .75f, true);
+        final Long2ObjectLinkedOpenHashMap<CachedSection> sections = new Long2ObjectLinkedOpenHashMap<>();
         final Visibility visibility;
         volatile long revision;
 
@@ -327,8 +327,8 @@ public final class LightField {
                 fixtures.put(id, next);
                 index(next, true);
             }
-            for (var cached : sections.entrySet()) {
-                if (sectionIntersects(cached.getKey(), affected)) {
+            for (var cached : sections.long2ObjectEntrySet()) {
+                if (sectionIntersects(cached.getLongKey(), affected)) {
                     Arrays.fill(cached.getValue().levels, (byte) -1);
                     if (!weightsOnly) {
                         cached.getValue().visibility.remove(id);
@@ -382,10 +382,10 @@ public final class LightField {
                 if (entries.isEmpty()) {
                     return 0;
                 }
-                cached = sections.get(section);
+                cached = sections.getAndMoveToLast(section);
                 if (cached == null) {
                     if (sections.size() >= CACHE_SECTIONS) {
-                        sections.remove(sections.keySet().iterator().next());
+                        sections.removeFirst();
                     }
                     cached = new CachedSection();
                     sections.put(section, cached);
@@ -470,7 +470,7 @@ public final class LightField {
 
         private List<Long> forget(AABB bounds) {
             List<Long> removed = new ArrayList<>();
-            sections.keySet().removeIf(key -> {
+            sections.keySet().removeIf((java.util.function.LongPredicate) key -> {
                 if (sectionIntersects(key, bounds)) {
                     removed.add(key);
                     return true;
@@ -481,7 +481,7 @@ public final class LightField {
         }
 
         synchronized void forgetChunk(ChunkPos chunk) {
-            sections.keySet().removeIf(key -> SectionPos.x(key) == chunk.x && SectionPos.z(key) == chunk.z);
+            sections.keySet().removeIf((java.util.function.LongPredicate) key -> SectionPos.x(key) == chunk.x && SectionPos.z(key) == chunk.z);
         }
     }
 

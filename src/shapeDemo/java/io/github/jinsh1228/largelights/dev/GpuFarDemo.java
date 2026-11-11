@@ -2,7 +2,6 @@ package io.github.jinsh1228.largelights.dev;
 
 import java.util.Arrays;
 
-import org.haruyq.createmediasystems.CreateMediaSystems;
 import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
 import org.haruyq.createmediasystems.lighting.LightingMonitorBlock;
 import org.lwjgl.opengl.GL11;
@@ -170,12 +169,12 @@ public final class GpuFarDemo {
         }
         for (int x = 0; x < 4; x++) {
             for (int z = 0; z < 2; z++) {
-                level.setBlock(LightingConsoleBlock.at(CONSOLE, Direction.NORTH, x, 0, z),
-                        CreateMediaSystems.LIGHTING_CONSOLE.get().defaultBlockState()
+                level.setBlock(org.haruyq.createmediasystems.lighting.ConsoleLayout.at(CONSOLE, Direction.NORTH, x, 0, z),
+                        org.haruyq.createmediasystems.lighting.LightingFeature.LIGHTING_CONSOLE.get().defaultBlockState()
                                 .setValue(LightingConsoleBlock.FACING, Direction.NORTH), Block.UPDATE_ALL);
             }
-            level.setBlock(LightingConsoleBlock.at(CONSOLE, Direction.NORTH, x, 1, 1),
-                    CreateMediaSystems.LIGHTING_MONITOR.get().defaultBlockState()
+            level.setBlock(org.haruyq.createmediasystems.lighting.ConsoleLayout.at(CONSOLE, Direction.NORTH, x, 1, 1),
+                    org.haruyq.createmediasystems.lighting.LightingFeature.LIGHTING_MONITOR.get().defaultBlockState()
                             .setValue(LightingMonitorBlock.FACING, Direction.NORTH), Block.UPDATE_ALL);
         }
         // Begin at the receiver: production registration must handle a source outside native vertical compilation.
@@ -194,7 +193,7 @@ public final class GpuFarDemo {
         var group = console.settings.groups[0];
         group.brightness = 1;
         group.range = 300;
-        group.motion = 0;
+        group.motion = org.haruyq.createmediasystems.lighting.LightingSettings.Motion.FIXED;
         group.pan = 0;
         group.tilt = Aim.NEUTRAL_TILT;
         group.audio = false;

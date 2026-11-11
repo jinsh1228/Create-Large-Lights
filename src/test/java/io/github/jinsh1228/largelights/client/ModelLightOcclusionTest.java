@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.Random;
 
 import org.junit.jupiter.api.Test;
 
@@ -87,6 +88,30 @@ class ModelLightOcclusionTest {
         var face = planeZ(0.5, 0, 1, 0, 1, OPAQUE);
         assertNull(ModelLightOcclusion.intersect(List.of(face), new Vec3(0, 0.5, 0), new Vec3(1, 0.5, 0)));
         assertNull(ModelLightOcclusion.intersect(List.of(face), new Vec3(0.5, 0.5, -1), new Vec3(0.5, 0.5, 0)));
+    }
+
+    @Test
+    void skewedModFacesRetainTheirIntersectionAndTextureCoordinatesFromBothSides() {
+        Random random = new Random(167);
+        for (int i = 0; i < 512; i++) {
+            Vec3 at = new Vec3(random.nextDouble() * 20 - 10, random.nextDouble() * 20 - 10, random.nextDouble() * 20 - 10);
+            Vec3 across = new Vec3(1, random.nextDouble(), random.nextDouble());
+            Vec3 down = new Vec3(random.nextDouble(), 1, -random.nextDouble());
+            Vec3 normal = across.cross(down).normalize();
+            double u = i % 2 == 0 ? .2 : .8, v = .6;
+            Vec3 point = at.add(across.scale(u)).add(down.scale(v));
+            var face = new ModelLightOcclusion.Quad(new Vec3[]{at, at.add(across), at.add(across).add(down), at.add(down)},
+                    uv(), (s, t) -> Math.abs(s - u) < 1e-9 && Math.abs(t - v) < 1e-9);
+            Vec3 from = point.subtract(normal.scale(3)), to = point.add(normal.scale(7));
+            var forward = ModelLightOcclusion.intersect(List.of(face), from, to);
+            var backward = ModelLightOcclusion.intersect(List.of(face), to, from);
+            assertNotNull(forward);
+            assertNotNull(backward);
+            assertEquals(.3, forward.fraction(), 1e-9);
+            assertEquals(.7, backward.fraction(), 1e-9);
+            assertTrue(forward.normal().dot(normal) < 0);
+            assertTrue(backward.normal().dot(normal) > 0);
+        }
     }
 
     private static ModelLightOcclusion.Quad planeZ(double z, double x0, double x1, double y0, double y1,

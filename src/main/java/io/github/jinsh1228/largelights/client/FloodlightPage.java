@@ -55,9 +55,9 @@ public final class FloodlightPage implements LightingConsolePage {
         int count = 0;
         var level = console.getLevel();
         if (level != null) {
-            for (BlockPos pos : console.fixtures) {
+            for (BlockPos pos : console.fixtures()) {
                 if (level.isLoaded(pos) && level.getBlockEntity(pos) instanceof FloodlightBlock.Entity light
-                        && light.group == console.settings.selectedGroup) {
+                        && light.group() == console.settings.selectedGroup) {
                     count++;
                 }
             }
@@ -279,7 +279,7 @@ public final class FloodlightPage implements LightingConsolePage {
                 LightingText.number(level)), 0.84f);
         surface.monitorText(3.08f, rowTop(3) - 0.015f, text("fixtures_now", LightingText.number(fixtures)), 0.84f);
         surface.monitorText(3.08f, rowTop(MOTION_ROW) - 0.015f, text("motion_now",
-                LightingText.mode("motion", group.motion)), 0.84f);
+                LightingText.mode(group.motion)), 0.84f);
         surface.monitorText(3.08f, rowTop(TARGET_ROW) - 0.015f, text("target_now", target(console)), 0.84f);
     }
 
@@ -346,11 +346,11 @@ public final class FloodlightPage implements LightingConsolePage {
             }
             if (row(3, MOTION_ROW).contains(point.x, point.y)) {
                 return new Thing(row(3, MOTION_ROW), true, text("motion"),
-                        () -> LightingText.mode("motion", selected(console).motion))
+                        () -> LightingText.mode(selected(console).motion))
                         .onPress(shift -> LightingConsolePage.send(console, LightingPackets.Control.MOTION, g, 0,
-                                Math.floorMod(selected(console).motion + (shift ? -1 : 1), 4), 0))
+                                Math.floorMod(selected(console).motion.ordinal() + (shift ? -1 : 1), 4), 0))
                         .onScroll((step, shift) -> LightingConsolePage.send(console, LightingPackets.Control.MOTION, g, 0,
-                                Math.floorMod(selected(console).motion + step, 4), 0));
+                                Math.floorMod(selected(console).motion.ordinal() + step, 4), 0));
             }
             if (row(3, TARGET_ROW).contains(point.x, point.y)) {
                 return new Thing(row(3, TARGET_ROW), true, text("target"), () -> target(console))

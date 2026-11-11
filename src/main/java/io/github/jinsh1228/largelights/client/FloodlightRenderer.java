@@ -1,12 +1,11 @@
 package io.github.jinsh1228.largelights.client;
 
-import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
-
 import org.haruyq.createmediasystems.CreateMediaSystems;
+import org.haruyq.createmediasystems.Rgb;
+import org.haruyq.createmediasystems.client.IrisCompat;
 import org.haruyq.createmediasystems.SableCompat;
 import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
+import org.haruyq.createmediasystems.lighting.AnalysisFrame;
 import org.haruyq.createmediasystems.lighting.LightingIllumination;
 import org.haruyq.createmediasystems.lighting.LightingRaycast;
 import org.haruyq.createmediasystems.lighting.LightingRenderer;
@@ -41,9 +40,9 @@ import net.minecraft.world.phys.Vec3;
  * lenses and the air beam stopped where each edge meets a block.
  */
 public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightBlock.Entity> {
-    private static final MethodHandle ANALYSIS_SECONDS = analysisClock();
     private static final int EDGES = 16;
     private static final int STEPS = 8;
+    private static final Vector3f VERTEX = new Vector3f();
     /** The lighting console's brushed frame and riveted casing, as CMS's stage lights wear them. */
     private static final RenderType FRAME = RenderType.entityCutoutNoCull(
             CreateMediaSystems.id("textures/block/lighting_console_frame.png"));
@@ -142,7 +141,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         LightingConsoleBlock.Entity console = beam.console();
         double seconds = (level.getGameTime() + (double) partialTick) / 20;
         if (console != null) {
-            seconds = analysisSeconds(console, seconds);
+            seconds = console.playhead.seconds(System.nanoTime(), seconds);
         }
         Matrix4f local = aim(lamp, beam, seconds, partialTick);
         Matrix4f head = new Matrix4f(model).mul(local);
@@ -153,7 +152,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         boxes(frame, mount, normals(mount, normals), stadium ? STADIUM_MOUNT : FLOODLIGHT_MOUNT, light);
         boxes(frame, head, normals(head, normals), stadium ? STADIUM_FRAME : FLOODLIGHT_FRAME, light);
         boxes(buffers.getBuffer(CASING), head, normals, stadium ? STADIUM_CASING : FLOODLIGHT_CASING, light);
-        if (LightingRenderer.shadowPass()) {
+        if (IrisCompat.shadowPass()) {
             return;
         }
 
@@ -161,26 +160,14 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         int color = WARM_WHITE;
         if (console != null) {
             LightingSettings.Group group = beam.group();
-            boolean signal = level.getGameTime() - console.signalAt < 30;
-            if (group.audio && console.hasAudio && signal) {
-                float energy = switch (group.audioBand) {
-                    case 1 -> console.bass;
-                    case 2 -> console.mid;
-                    case 3 -> console.high;
-                    default -> console.audioLevel;
-                };
-                strength *= Mth.clamp(0.12f + energy * 1.5f + console.pulse * 0.35f, 0, 1);
-            }
-            boolean video = console.hasVideo && signal;
-            color = LightingSettings.color(group, lamp.order, Math.max(1, console.groupSize(lamp.group)), seconds,
-                    console.videoLeft, console.videoRight, video);
-            if (group.mapping == 3 && !(group.colorMode == 1 && video)) {
-                color = group.colors[Math.floorMod(lamp.individualColor, group.colorCount)];
-            }
+            strength = audioStrength(strength, group, console.audio(level.getGameTime()));
+            var shown = console.video(level.getGameTime());
+            color = color(group, lamp.order(), Math.max(1, console.groupSize(lamp.group())), seconds,
+                    shown, lamp.individualColor);
         }
 
         VertexConsumer lens = buffers.getBuffer(LightingRenderer.lensType());
-        int lensColor = strength > 0.001f ? LightingSettings.mix(color, 0xFFFFFF, 0.35f) : OFF_LENS;
+        int lensColor = strength > 0.001f ? Rgb.mix(color, 0xFFFFFF, 0.35f) : OFF_LENS;
         float[] lenses = stadium ? STADIUM_LENSES : FLOODLIGHT_LENSES;
         for (int i = 0; i < lenses.length; i += 4) {
             lensQuad(lens, head, lenses[i], lenses[i + 1], lenses[i + 2], lenses[i + 3], lensZ, lensColor);
@@ -194,7 +181,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         Vec3 right = vector(local, new Vec3(1, 0, 0)).normalize();
         Vec3 up = vector(local, new Vec3(0, 1, 0)).normalize();
         double halfAngle = Math.toRadians(beam.spread()) / 2;
-        LightingRaycast rays = new LightingRaycast(level, lamp.getBlockPos(), true);
+        LightingRaycast rays = LightingRaycast.rendered(level, lamp.getBlockPos());
         if (!(lamp.renderTrace instanceof Trace)) {
             lamp.renderTrace = new Trace();
         }
@@ -215,32 +202,6 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
                 distanceSqr < NEAR * NEAR ? STEPS : STEPS / 2);
     }
 
-    /** CMS moved this clock in 1.2.2; 1.2.0 and 1.2.1 retain the original package. */
-    private static MethodHandle analysisClock() {
-        ReflectiveOperationException missing = null;
-        for (String namespace : new String[]{"lighting", "playback"}) {
-            try {
-                Class<?> type = Class.forName("org.haruyq.createmediasystems." + namespace + ".AnalysisPlayback",
-                        false, FloodlightRenderer.class.getClassLoader());
-                return MethodHandles.publicLookup().findStatic(type, "apply",
-                        MethodType.methodType(double.class, LightingConsoleBlock.Entity.class, double.class));
-            } catch (ReflectiveOperationException error) {
-                missing = error;
-            }
-        }
-        throw new IllegalStateException("CMS AnalysisPlayback.apply is missing from both supported packages", missing);
-    }
-
-    private static double analysisSeconds(LightingConsoleBlock.Entity console, double fallback) {
-        try {
-            return (double) ANALYSIS_SECONDS.invokeExact(console, fallback);
-        } catch (RuntimeException | Error error) {
-            throw error;
-        } catch (Throwable error) {
-            throw new IllegalStateException("CMS media analysis clock failed", error);
-        }
-    }
-
     /**
      * Where the head points this frame: its aim with the console's pan and tilt (Beam), and, linked, its group's
      * motion as a stage light's (a sway, a circle, or following the target player), eased as a stage light's head.
@@ -255,14 +216,14 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         float yaw = relative ? group.pan : beam.yaw();
         float pitch = relative ? group.tilt : beam.pitch();
         if (console != null && group != null) {
-            double phase = (group.audio && console.audioSource != null ? console.motionPhase : seconds) * group.speed
-                    + lamp.order * 0.35;
-            if (group.motion == 1) {
+            double phase = (group.audio && console.audioSource() != null
+                    ? console.playhead.phase(System.nanoTime(), seconds) : seconds) * group.speed + lamp.order() * 0.35;
+            if (group.motion == LightingSettings.Motion.SWEEP) {
                 yaw += (float) Math.sin(phase) * 55;
-            } else if (group.motion == 2) {
+            } else if (group.motion == LightingSettings.Motion.CIRCLE) {
                 yaw += (float) Math.sin(phase) * 48;
                 pitch += (float) Math.cos(phase) * 22;
-            } else if (group.motion == 3) {
+            } else if (group.motion == LightingSettings.Motion.TRACK) {
                 // Following: straight at the target player; with none, held where it is.
                 hold = true;
                 Player target = group.target == null ? null : lamp.getLevel().getPlayerByUUID(group.target);
@@ -300,6 +261,25 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
      */
     static float overlay(FloodlightKind kind, boolean real, int lightLimit) {
         return kind.intensity * (real && lightLimit > 0 ? REAL_LIGHT_OVERLAY : 1);
+    }
+
+    static float audioStrength(float strength, LightingSettings.Group group, AnalysisFrame audio) {
+        if (!group.audio || audio == null) return strength;
+        float energy = switch (group.audioBand) {
+            case BASS -> audio.bass();
+            case MID -> audio.mid();
+            case HIGH -> audio.high();
+            case ALL -> audio.level();
+        };
+        return strength * Mth.clamp(0.12f + energy * 1.5f + audio.pulse() * 0.35f, 0, 1);
+    }
+
+    static int color(LightingSettings.Group group, int order, int count, double seconds, AnalysisFrame shown, int individual) {
+        boolean video = shown != null;
+        return group.mapping == LightingSettings.Mapping.PER_FIXTURE && !group.videoColors(video)
+                ? group.colors[Math.floorMod(individual, group.colorCount)]
+                : LightingSettings.color(group, order, count, seconds,
+                        shown == null ? 0 : shown.left(), shown == null ? 0 : shown.right(), video);
     }
 
     /** Where the beam's middle and edges meet blocks, traced again only when something that matters changed. */
@@ -381,13 +361,13 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
                 double t1 = length * (step + 1) / steps;
                 int alpha0 = Mth.clamp(Math.round(alpha * (1 - 0.85f * step / steps)), 0, 255);
                 int alpha1 = Mth.clamp(Math.round(alpha * (1 - 0.85f * (step + 1) / steps)), 0, 255);
-                out.addVertex(matrix, (float) (ax + e[ai] * t0), (float) (ay + e[ai + 1] * t0), (float) (az + e[ai + 2] * t0))
+                vertex(out, matrix, (float) (ax + e[ai] * t0), (float) (ay + e[ai + 1] * t0), (float) (az + e[ai + 2] * t0))
                         .setColor(r, g, b, alpha0);
-                out.addVertex(matrix, (float) (bx + e[bi] * t0), (float) (by + e[bi + 1] * t0), (float) (bz + e[bi + 2] * t0))
+                vertex(out, matrix, (float) (bx + e[bi] * t0), (float) (by + e[bi + 1] * t0), (float) (bz + e[bi + 2] * t0))
                         .setColor(r, g, b, alpha0);
-                out.addVertex(matrix, (float) (bx + e[bi] * t1), (float) (by + e[bi + 1] * t1), (float) (bz + e[bi + 2] * t1))
+                vertex(out, matrix, (float) (bx + e[bi] * t1), (float) (by + e[bi + 1] * t1), (float) (bz + e[bi + 2] * t1))
                         .setColor(r, g, b, alpha1);
-                out.addVertex(matrix, (float) (ax + e[ai] * t1), (float) (ay + e[ai + 1] * t1), (float) (az + e[ai + 2] * t1))
+                vertex(out, matrix, (float) (ax + e[ai] * t1), (float) (ay + e[ai + 1] * t1), (float) (az + e[ai + 2] * t1))
                         .setColor(r, g, b, alpha1);
             }
         }
@@ -396,10 +376,16 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
     private static void lensQuad(VertexConsumer out, Matrix4f matrix, float x0, float y0, float x1, float y1, float z,
                                  int color) {
         int r = color >> 16 & 255, g = color >> 8 & 255, b = color & 255;
-        out.addVertex(matrix, x0, y0, z).setColor(r, g, b, 255);
-        out.addVertex(matrix, x1, y0, z).setColor(r, g, b, 255);
-        out.addVertex(matrix, x1, y1, z).setColor(r, g, b, 255);
-        out.addVertex(matrix, x0, y1, z).setColor(r, g, b, 255);
+        vertex(out, matrix, x0, y0, z).setColor(r, g, b, 255);
+        vertex(out, matrix, x1, y0, z).setColor(r, g, b, 255);
+        vertex(out, matrix, x1, y1, z).setColor(r, g, b, 255);
+        vertex(out, matrix, x0, y1, z).setColor(r, g, b, 255);
+    }
+
+    /** Render-thread scratch: VertexConsumer's matrix overload allocates a vector for every vertex. */
+    private static VertexConsumer vertex(VertexConsumer out, Matrix4f matrix, float x, float y, float z) {
+        matrix.transformPosition(x, y, z, VERTEX);
+        return out.addVertex(VERTEX.x, VERTEX.y, VERTEX.z);
     }
 
     /** The six face normals (north, south, west, east, up, down) through {@code matrix}, into {@code out}. */
@@ -443,13 +429,13 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
                              float bx, float by, float bz, float cx, float cy, float cz, float dx, float dy, float dz,
                              int r, int g, int b, int light) {
         float nx = n[face * 3], ny = n[face * 3 + 1], nz = n[face * 3 + 2];
-        out.addVertex(m, ax, ay, az).setColor(r, g, b, 255).setUv(0, 1).setOverlay(OverlayTexture.NO_OVERLAY)
+        vertex(out, m, ax, ay, az).setColor(r, g, b, 255).setUv(0, 1).setOverlay(OverlayTexture.NO_OVERLAY)
                 .setLight(light).setNormal(nx, ny, nz);
-        out.addVertex(m, bx, by, bz).setColor(r, g, b, 255).setUv(1, 1).setOverlay(OverlayTexture.NO_OVERLAY)
+        vertex(out, m, bx, by, bz).setColor(r, g, b, 255).setUv(1, 1).setOverlay(OverlayTexture.NO_OVERLAY)
                 .setLight(light).setNormal(nx, ny, nz);
-        out.addVertex(m, cx, cy, cz).setColor(r, g, b, 255).setUv(1, 0).setOverlay(OverlayTexture.NO_OVERLAY)
+        vertex(out, m, cx, cy, cz).setColor(r, g, b, 255).setUv(1, 0).setOverlay(OverlayTexture.NO_OVERLAY)
                 .setLight(light).setNormal(nx, ny, nz);
-        out.addVertex(m, dx, dy, dz).setColor(r, g, b, 255).setUv(0, 0).setOverlay(OverlayTexture.NO_OVERLAY)
+        vertex(out, m, dx, dy, dz).setColor(r, g, b, 255).setUv(0, 0).setOverlay(OverlayTexture.NO_OVERLAY)
                 .setLight(light).setNormal(nx, ny, nz);
     }
 

@@ -95,6 +95,9 @@ if (gpuDemo) {
         systemProperty 'createLargeLights.gpuDemo.shadowSize', providers.gradleProperty('shadowSize').getOrElse('1024')
         systemProperty 'createLargeLights.gpuDemo.lightCount', providers.gradleProperty('gpuLights').getOrElse('1')
         systemProperty 'createLargeLights.gpuDemo.angle', providers.gradleProperty('gpuAngle').getOrElse('oblique')
+        systemProperty 'createLargeLights.gpuDemo.performance', providers.gradleProperty('gpuPerf').isPresent().toString()
+        systemProperty 'createLargeLights.gpuDemo.motion', providers.gradleProperty('gpuMotion').getOrElse('0')
+        if (providers.gradleProperty('gpuPerf').isPresent()) jvmArgument "-Xmx${providers.gradleProperty('gpuHeap').getOrElse('3G')}"
         programArguments.addAll('--width', '1280', '--height', '720')
     }
 }
@@ -120,6 +123,8 @@ configurations {
 dependencies {
     // settings.gradle substitutes the source checkout after checking its commit.
     implementation("org.haruyq:create_media_systems:${cms_revision}")
+    // Types exposed by CMS's SableCompat; CMS supplies the runtime.
+    compileOnly("dev.ryanhcode.sable-companion:sable-companion-common-${minecraft_version}:1.6.0")
 
     implementation("com.simibubi.create:create-${minecraft_version}:${create_version}:slim") {
         transitive = false

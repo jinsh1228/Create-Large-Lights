@@ -49,7 +49,6 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.ScreenEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
 
-import org.haruyq.createmediasystems.CreateMediaSystems;
 import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
 import org.haruyq.createmediasystems.lighting.LightingMonitorBlock;
 import org.haruyq.createmediasystems.lighting.LightingRaycast;
@@ -63,9 +62,10 @@ public final class ShapeLightingDemo {
     private static final String WORLD = "ShapeLightingDemo";
     private static final int FLOOR = 150;
     private static final boolean GPU_TRIAL = Boolean.getBoolean("createLargeLights.gpuDemo");
+    private static final boolean PERFORMANCE = Boolean.getBoolean("createLargeLights.gpuDemo.performance");
     private static final boolean FIELD_DEMO = Boolean.getBoolean("createLargeLights.fieldDemo");
     private static final boolean VERTICAL = "vertical".equals(System.getProperty("createLargeLights.gpuDemo.angle", "oblique"));
-    private static final BlockPos LIGHT = new BlockPos(0, FLOOR + (GPU_TRIAL ? 24 : 8), GPU_TRIAL && VERTICAL ? 5 : -10);
+    private static final BlockPos LIGHT = new BlockPos(0, FLOOR + (PERFORMANCE ? 60 : GPU_TRIAL ? 24 : 8), GPU_TRIAL && VERTICAL ? 5 : -10);
     private static final BlockPos CONSOLE = new BlockPos(16, FLOOR + 1, -9);
     private static final BlockPos FIELD_TEST = new BlockPos(0, FLOOR + 40, 0);
     private static final BlockPos VANILLA_TEST = FIELD_TEST.offset(0, 0, -24);
@@ -186,14 +186,16 @@ public final class ShapeLightingDemo {
     private static void build(ServerLevel level) {
         level.setDayTime(18000);
         level.setWeatherParameters(6000, 0, false, false);
-        FloodlightConfig.REAL_LIGHT.set(!GPU_TRIAL);
+        FloodlightConfig.REAL_LIGHT.set(!GPU_TRIAL || PERFORMANCE);
         BlockState wall = Blocks.LIGHT_GRAY_CONCRETE.defaultBlockState();
-        int roof = FLOOR + (GPU_TRIAL ? 30 : 14);
-        for (int x = -20; x <= 20; x++) {
-            for (int z = -14; z <= 18; z++) {
+        int roof = FLOOR + (PERFORMANCE ? 66 : GPU_TRIAL ? 30 : 14);
+        int minX = PERFORMANCE ? -40 : -20, maxX = PERFORMANCE ? 40 : 20;
+        int minZ = PERFORMANCE ? -40 : -14, maxZ = PERFORMANCE ? 40 : 18;
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
                 level.setBlock(new BlockPos(x, FLOOR, z), Blocks.WHITE_CONCRETE.defaultBlockState(), Block.UPDATE_CLIENTS);
                 for (int y = FLOOR + 1; y < roof; y++) {
-                    boolean edge = x == -20 || x == 20 || z == -14 || z == 18;
+                    boolean edge = x == minX || x == maxX || z == minZ || z == maxZ;
                     level.setBlock(new BlockPos(x, y, z), edge ? wall : Blocks.AIR.defaultBlockState(),
                             Block.UPDATE_CLIENTS);
                 }
@@ -269,12 +271,12 @@ public final class ShapeLightingDemo {
     private static void buildConsole(ServerLevel level) {
         for (int x = 0; x < 4; x++) {
             for (int z = 0; z < 2; z++) {
-                level.setBlock(LightingConsoleBlock.at(CONSOLE, Direction.NORTH, x, 0, z),
-                        CreateMediaSystems.LIGHTING_CONSOLE.get().defaultBlockState()
+                level.setBlock(org.haruyq.createmediasystems.lighting.ConsoleLayout.at(CONSOLE, Direction.NORTH, x, 0, z),
+                        org.haruyq.createmediasystems.lighting.LightingFeature.LIGHTING_CONSOLE.get().defaultBlockState()
                                 .setValue(LightingConsoleBlock.FACING, Direction.NORTH), Block.UPDATE_ALL);
             }
-            level.setBlock(LightingConsoleBlock.at(CONSOLE, Direction.NORTH, x, 1, 1),
-                    CreateMediaSystems.LIGHTING_MONITOR.get().defaultBlockState()
+            level.setBlock(org.haruyq.createmediasystems.lighting.ConsoleLayout.at(CONSOLE, Direction.NORTH, x, 1, 1),
+                    org.haruyq.createmediasystems.lighting.LightingFeature.LIGHTING_MONITOR.get().defaultBlockState()
                             .setValue(LightingMonitorBlock.FACING, Direction.NORTH), Block.UPDATE_ALL);
         }
     }
@@ -301,16 +303,16 @@ public final class ShapeLightingDemo {
         console.settings.enabled = true;
         var group = console.settings.groups[0];
         group.brightness = 1;
-        group.range = 64;
+        group.range = PERFORMANCE ? 128 : 64;
         group.pan = 0;
         group.tilt = Aim.NEUTRAL_TILT;
-        group.motion = 0;
+        group.motion = org.haruyq.createmediasystems.lighting.LightingSettings.byId(org.haruyq.createmediasystems.lighting.LightingSettings.Motion.values(), PERFORMANCE ? Integer.getInteger("createLargeLights.gpuDemo.motion", 0) : 0);
         group.colorCount = 1;
         group.colors[0] = 0x55CCFF;
         group.colorCycle = false;
         group.audio = false;
         ConsoleSettings.setSpread(console, 0, 80);
-        ConsoleSettings.setRealLight(console, 0, !GPU_TRIAL);
+        ConsoleSettings.setRealLight(console, 0, !GPU_TRIAL || PERFORMANCE);
         console.changed();
     }
 
@@ -319,8 +321,8 @@ public final class ShapeLightingDemo {
         if (level.getBlockEntity(LIGHT) instanceof FloodlightBlock.Entity light) {
             var beam = light.beam();
             check(beam.strength() == 1 && beam.console() != null, "cyan beam enabled");
-            check(FloodlightConfig.REAL_LIGHT.get() != GPU_TRIAL,
-                    GPU_TRIAL ? "real lighting disabled to isolate the projection trial" : "real lighting enabled");
+            check(FloodlightConfig.REAL_LIGHT.get() == (!GPU_TRIAL || PERFORMANCE),
+                    !GPU_TRIAL || PERFORMANCE ? "real lighting enabled" : "real lighting disabled to isolate the projection trial");
             int physical = 0;
             for (BlockPos at : BlockPos.betweenClosed(-20, FLOOR + 1, -14, 20, FLOOR + 13, 18)) {
                 if (level.getBlockState(at).is(Blocks.LIGHT)) physical++;
@@ -472,7 +474,7 @@ public final class ShapeLightingDemo {
 
     /** Exercise the installed CMS mixin against the actual baked models and their texture alpha. */
     private static void checkRenderingRays(Minecraft mc) {
-        LightingRaycast rays = new LightingRaycast(mc.level, LIGHT, true);
+        LightingRaycast rays = LightingRaycast.rendered(mc.level, LIGHT);
         check(rays.visible(new Vec3(-11.5, FLOOR + 2.5, 3), new Vec3(-11.5, FLOOR + 2.5, 5.499)),
                 "iron bar receiver is visible in front of its model, inside the larger collision proxy");
 

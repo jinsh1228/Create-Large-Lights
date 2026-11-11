@@ -9,6 +9,7 @@ import java.util.WeakHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongIterator;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
@@ -257,7 +258,8 @@ public final class LightFieldNetwork {
                         }
                     }
                     relevant(level, chunk, watch);
-                    for (long section : watch.sections) {
+                    for (LongIterator it = watch.sections.iterator(); it.hasNext(); ) {
+                        long section = it.nextLong();
                         if (LightField.sectionIntersects(section, bounds)) {
                             state.dirty.add(section);
                         }
@@ -282,6 +284,7 @@ public final class LightFieldNetwork {
             if (!sections[i].hasOnlyAir()) {
                 for (int y = Math.max(0, i - 1); y <= Math.min(sections.length - 1, i + 1); y++) {
                     long section = SectionPos.asLong(watch.chunk.getPos().x, y + level.getMinSection(), watch.chunk.getPos().z);
+                    if (watch.sections.contains(section)) continue;
                     for (LightField.Entry entry : entries) {
                         if (entry.beam().intersectsSection(section)) {
                             watch.sections.add(section);

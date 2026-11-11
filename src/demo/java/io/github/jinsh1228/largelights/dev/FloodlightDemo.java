@@ -261,16 +261,16 @@ public final class FloodlightDemo {
     }
 
     private static void console(ServerLevel level) {
-        var consoleBlock = org.haruyq.createmediasystems.CreateMediaSystems.LIGHTING_CONSOLE.get();
-        var monitorBlock = org.haruyq.createmediasystems.CreateMediaSystems.LIGHTING_MONITOR.get();
+        var consoleBlock = org.haruyq.createmediasystems.lighting.LightingFeature.LIGHTING_CONSOLE.get();
+        var monitorBlock = org.haruyq.createmediasystems.lighting.LightingFeature.LIGHTING_MONITOR.get();
         for (int x = 0; x < 4; x++) {
             for (int z = 0; z < 2; z++) {
-                level.setBlock(org.haruyq.createmediasystems.lighting.LightingConsoleBlock.at(CONSOLE, Direction.NORTH, x, 0, z),
+                level.setBlock(org.haruyq.createmediasystems.lighting.ConsoleLayout.at(CONSOLE, Direction.NORTH, x, 0, z),
                         consoleBlock.defaultBlockState().setValue(
                                 org.haruyq.createmediasystems.lighting.LightingConsoleBlock.FACING, Direction.NORTH),
                         Block.UPDATE_ALL);
             }
-            level.setBlock(org.haruyq.createmediasystems.lighting.LightingConsoleBlock.at(CONSOLE, Direction.NORTH, x, 1, 1),
+            level.setBlock(org.haruyq.createmediasystems.lighting.ConsoleLayout.at(CONSOLE, Direction.NORTH, x, 1, 1),
                     monitorBlock.defaultBlockState().setValue(
                             org.haruyq.createmediasystems.lighting.LightingMonitorBlock.FACING, Direction.NORTH),
                     Block.UPDATE_ALL);
@@ -379,19 +379,19 @@ public final class FloodlightDemo {
     private static void checkFamilies(ServerLevel level) {
         var console = consoleAt(level);
         BlockPos stagePos = new BlockPos(-6, FLOOR + 1, 20);
-        level.setBlock(stagePos, org.haruyq.createmediasystems.CreateMediaSystems.STAGE_LIGHT.get().defaultBlockState(),
+        level.setBlock(stagePos, org.haruyq.createmediasystems.lighting.LightingFeature.STAGE_LIGHT.get().defaultBlockState(),
                 Block.UPDATE_ALL);
         var stage = (org.haruyq.createmediasystems.lighting.StageLightBlock.Entity) level.getBlockEntity(stagePos);
         FloodlightBlock.Entity corner = fixture(level, CORNER_LIGHT);
         check("create_large_lights".equals(console.family(0)), "group 1 is the floodlights': {}", console.family(0));
-        check(!console.accepts(stage, 0) && !console.bind(stage, 0) && stage.console == null,
+        check(!console.accepts(stage, 0) && !console.bind(stage, 0) && stage.console() == null,
                 "a stage light can't join the floodlights' group");
         check(console.bind(stage, 1) && "create_media_systems".equals(console.family(1)),
                 "it joins an empty group, which becomes the stage lights': {}", console.family(1));
-        check(!console.bind(corner, 1) && corner.console == null, "a floodlight can't join the stage lights' group");
+        check(!console.bind(corner, 1) && corner.console() == null, "a floodlight can't join the stage lights' group");
         check(console.bind(corner, 2), "and joins another empty group");
         // Moving a linked fixture (as scrolling it does) is held to the same rule.
-        check(!console.bind(corner, 1) && corner.group == 2, "moving it into the stage lights' group is refused");
+        check(!console.bind(corner, 1) && corner.group() == 2, "moving it into the stage lights' group is refused");
         corner.unlink();
         stage.unlink();
         level.removeBlock(stagePos, false);

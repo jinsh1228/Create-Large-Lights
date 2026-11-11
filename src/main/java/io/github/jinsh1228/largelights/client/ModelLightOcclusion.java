@@ -91,19 +91,20 @@ public final class ModelLightOcclusion {
     }
 
     private static Hit triangle(Quad quad, int a, int b, int c, Vec3 from, Vec3 delta) {
-        Vec3 edge1 = quad.points[b].subtract(quad.points[a]);
-        Vec3 edge2 = quad.points[c].subtract(quad.points[a]);
-        Vec3 p = delta.cross(edge2);
-        double determinant = edge1.dot(p);
+        Vec3 origin = quad.points[a];
+        double ex = quad.points[b].x - origin.x, ey = quad.points[b].y - origin.y, ez = quad.points[b].z - origin.z;
+        double fx = quad.points[c].x - origin.x, fy = quad.points[c].y - origin.y, fz = quad.points[c].z - origin.z;
+        double px = delta.y * fz - delta.z * fy, py = delta.z * fx - delta.x * fz, pz = delta.x * fy - delta.y * fx;
+        double determinant = ex * px + ey * py + ez * pz;
         // Both sides occlude: model winding must not let a ray through the back of a thin face.
         if (Math.abs(determinant) < EPSILON) {
             return null;
         }
-        Vec3 origin = from.subtract(quad.points[a]);
-        double u = origin.dot(p) / determinant;
-        Vec3 q = origin.cross(edge1);
-        double v = delta.dot(q) / determinant;
-        double fraction = edge2.dot(q) / determinant;
+        double ox = from.x - origin.x, oy = from.y - origin.y, oz = from.z - origin.z;
+        double u = (ox * px + oy * py + oz * pz) / determinant;
+        double qx = oy * ez - oz * ey, qy = oz * ex - ox * ez, qz = ox * ey - oy * ex;
+        double v = (delta.x * qx + delta.y * qy + delta.z * qz) / determinant;
+        double fraction = (fx * qx + fy * qy + fz * qz) / determinant;
         if (u < -EPSILON || v < -EPSILON || u + v > 1 + EPSILON || fraction < 0 || fraction > 1) {
             return null;
         }
@@ -112,7 +113,7 @@ public final class ModelLightOcclusion {
         if (!quad.alpha.opaque(textureU, textureV)) {
             return null;
         }
-        Vec3 normal = edge1.cross(edge2).normalize();
+        Vec3 normal = new Vec3(ey * fz - ez * fy, ez * fx - ex * fz, ex * fy - ey * fx).normalize();
         return new Hit(fraction, normal.dot(delta) > 0 ? normal.scale(-1) : normal);
     }
 }

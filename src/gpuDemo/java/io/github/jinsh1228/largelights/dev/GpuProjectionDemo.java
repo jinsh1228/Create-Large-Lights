@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
+import org.haruyq.createmediasystems.lighting.LightingMonitorBlock;
 import org.haruyq.createmediasystems.lighting.LightingIllumination;
 
 import org.joml.Matrix4f;
@@ -27,10 +28,15 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 
 import com.mojang.logging.LogUtils;
+import com.simibubi.create.AllBlocks;
+import com.simibubi.create.content.decoration.copycat.CopycatBlockEntity;
 
 import io.github.jinsh1228.largelights.Aim;
 import io.github.jinsh1228.largelights.CreateLargeLights;
 import io.github.jinsh1228.largelights.FloodlightBlock;
+import io.github.jinsh1228.largelights.ConsoleSettings;
+import io.github.jinsh1228.largelights.client.GpuLightProjection;
+import io.github.jinsh1228.largelights.client.GpuLightGeometry;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 
 import net.minecraft.client.Minecraft;
@@ -66,12 +72,14 @@ public final class GpuProjectionDemo {
     private static final int STRIDE = 11;
     private static final float NEAR = .25f;
     private static final boolean ENABLED = Boolean.getBoolean("createLargeLights.gpuDemo");
+    private static final boolean PERFORMANCE = Boolean.getBoolean("createLargeLights.gpuDemo.performance");
     private static final String MODE = System.getProperty("createLargeLights.gpuDemo.mode", "gpu");
     private static final boolean GPU = "gpu".equals(MODE);
     private static final int SIZE = Math.max(256, Math.min(4096, Integer.getInteger("createLargeLights.gpuDemo.shadowSize", 1024)));
-    private static final int LIGHT_COUNT = Math.max(1, Math.min(16, Integer.getInteger("createLargeLights.gpuDemo.lightCount", 1)));
-    private static final BlockPos LAMP = new BlockPos(0, FLOOR + 24, vertical() ? 5 : -10);
+    private static final int LIGHT_COUNT = Math.max(1, Math.min(PERFORMANCE ? 128 : 16, Integer.getInteger("createLargeLights.gpuDemo.lightCount", 1)));
+    private static final BlockPos LAMP = new BlockPos(0, FLOOR + (PERFORMANCE ? 60 : 24), vertical() ? 5 : -10);
     private static final List<BlockPos> LAMPS = lampPositions();
+    private static final BlockPos SECOND_CONSOLE = new BlockPos(32, FLOOR + 1, 24);
     private static final List<Projector> projectors = new ArrayList<>();
     private static Level knownLevel;
     private static int ticks;
@@ -84,6 +92,9 @@ public final class GpuProjectionDemo {
     private static final double[] gpuTimes = new double[20000];
     private static int frameCount, gpuCount, phase = -1;
     private static long previousFrame;
+    private static long productionStart, productionNanos, phaseShadows, phaseSurfaces;
+    private static int productionSamples;
+    private static boolean productionQuery;
     private static boolean ready;
     private static volatile boolean linked;
     private static boolean configurationChecked;
@@ -118,7 +129,11 @@ public final class GpuProjectionDemo {
         List<BlockPos> positions = new ArrayList<>(LIGHT_COUNT);
         positions.add(lamp());
         for (int i = 0; positions.size() < LIGHT_COUNT; i++) {
-            positions.add(new BlockPos(-12 + (i % 4) * 8, FLOOR + 24, -8 + (i / 4) * 6));
+            int side = Math.max(1, (int) Math.ceil(Math.sqrt(LIGHT_COUNT)));
+            BlockPos pos = PERFORMANCE
+                    ? new BlockPos(-(side - 1) * 3 + (i % side) * 6, LAMP.getY(), -(side - 1) * 3 + (i / side) * 6)
+                    : new BlockPos(-12 + (i % 4) * 8, LAMP.getY(), -8 + (i / 4) * 6);
+            if (!positions.contains(pos)) positions.add(pos);
         }
         return List.copyOf(positions);
     }
@@ -154,20 +169,35 @@ public final class GpuProjectionDemo {
 
     private static boolean configured(FloodlightBlock.Entity.Beam beam) {
         return beam.console() != null && beam.group() != null && beam.strength() == 1
-                && beam.range() == 64 && beam.spread() == 80 && beam.group().colors[0] == 0x55CCFF;
+                && beam.range() == (PERFORMANCE ? 128 : 64) && beam.spread() == 80 && beam.group().colors[0] == 0x55CCFF;
     }
 
     private static void link(ServerLevel level) {
         if (!(level.getBlockEntity(lamp()) instanceof FloodlightBlock.Entity anchor) || !configured(anchor.beam())) return;
         LightingConsoleBlock.Entity console = anchor.beam().console();
-        for (BlockPos pos : LAMPS) {
+        LightingConsoleBlock.Entity second = LIGHT_COUNT <= 64 ? null : LightingConsoleBlock.find(level, SECOND_CONSOLE);
+        if (LIGHT_COUNT > 64 && (second == null || !second.formed)) return;
+        if (second != null) {
+            second.settings.enabled = true;
+            second.settings.master = 1;
+            var group = second.settings.groups[0];
+            group.brightness = 1; group.range = 128; group.pan = 0; group.tilt = Aim.NEUTRAL_TILT;
+            group.motion = org.haruyq.createmediasystems.lighting.LightingSettings.byId(org.haruyq.createmediasystems.lighting.LightingSettings.Motion.values(), Integer.getInteger("createLargeLights.gpuDemo.motion", 0));
+            group.colorCount = 1; group.colors[0] = 0x55CCFF;
+            ConsoleSettings.setSpread(second, 0, 80);
+            ConsoleSettings.setRealLight(second, 0, true);
+        }
+        for (int i = 0; i < LAMPS.size(); i++) {
+            BlockPos pos = LAMPS.get(i);
+            LightingConsoleBlock.Entity owner = i < 64 ? console : second;
             if (!(level.getBlockEntity(pos) instanceof FloodlightBlock.Entity light)) return;
-            if ((light.group != 0 || light.beam().console() != console) && !console.bind(light, 0)) return;
+            if ((light.group() != 0 || light.beam().console() != owner) && !owner.bind(light, 0)) return;
         }
         for (BlockPos pos : LAMPS) {
             if (!configured(((FloodlightBlock.Entity) level.getBlockEntity(pos)).beam())) return;
         }
         linked = true;
+        if (second != null) second.changed();
     }
 
     private static boolean checkConfiguration(Level level) {
@@ -175,18 +205,49 @@ public final class GpuProjectionDemo {
         for (BlockPos pos : LAMPS) {
             if (!(level.getBlockEntity(pos) instanceof FloodlightBlock.Entity light)) return false;
             var beam = light.beam();
-            if (light.group != 0 || !configured(beam)) return false;
+            if (light.group() != 0 || !configured(beam)) return false;
             signature = 31 * signature + pos.hashCode();
             signature = 31 * signature + Float.floatToIntBits(beam.yaw());
             signature = 31 * signature + Float.floatToIntBits(beam.pitch());
         }
-        LogUtils.getLogger().info("GPU_TRIAL_CONFIG mode={} angle={} lights={} signature={} strength=1 spread=80 range=64 color=55CCFF all_fixtures_verified=true",
-                MODE, vertical() ? "vertical" : "oblique", LIGHT_COUNT, signature);
+        LogUtils.getLogger().info("GPU_TRIAL_CONFIG mode={} angle={} lights={} signature={} strength=1 spread=80 range={} color=55CCFF all_fixtures_verified=true",
+                MODE, vertical() ? "vertical" : "oblique", LIGHT_COUNT, signature, PERFORMANCE ? 128 : 64);
         return true;
     }
 
     /** Connected geometry, rather than the old isolated three-block examples. */
     private static void longRows(Level level) {
+        if (PERFORMANCE) {
+            BlockState[] shapes = {Blocks.IRON_BARS.defaultBlockState(), Blocks.OAK_FENCE.defaultBlockState(),
+                    Blocks.COBBLESTONE_WALL.defaultBlockState(), Blocks.QUARTZ_STAIRS.defaultBlockState(),
+                    Blocks.SMOOTH_STONE_SLAB.defaultBlockState(), Blocks.SMOOTH_STONE_SLAB.defaultBlockState().setValue(SlabBlock.TYPE, SlabType.TOP),
+                    AllBlocks.COPYCAT_PANEL.getDefaultState(), AllBlocks.COPYCAT_STEP.getDefaultState()};
+            int count = 0;
+            for (int x = -36; x <= 36; x += 3) {
+                for (int z = -36; z <= 36; z += 3) {
+                    if (x >= 10 && x <= 20 && z >= -14 && z <= -6) continue;
+                    for (int y = 1; y <= 3; y++) {
+                        BlockPos pos = new BlockPos(x, FLOOR + y, z);
+                        level.setBlock(pos, shapes[Math.floorMod(x + z + y, shapes.length)], Block.UPDATE_ALL);
+                        if (level.getBlockEntity(pos) instanceof CopycatBlockEntity copycat) {
+                            copycat.setMaterial((x & 1) == 0 ? Blocks.OAK_PLANKS.defaultBlockState() : Blocks.STONE.defaultBlockState());
+                        }
+                    }
+                    count += 3;
+                }
+            }
+            LogUtils.getLogger().info("PERF_SCENE room=81x81x66 partial_blocks={} real_light=true", count);
+        }
+        if (LIGHT_COUNT > 64) {
+            for (int x = 0; x < 4; x++) {
+                for (int z = 0; z < 2; z++) level.setBlock(org.haruyq.createmediasystems.lighting.ConsoleLayout.at(SECOND_CONSOLE, Direction.NORTH, x, 0, z),
+                        org.haruyq.createmediasystems.lighting.LightingFeature.LIGHTING_CONSOLE.get().defaultBlockState()
+                                .setValue(LightingConsoleBlock.FACING, Direction.NORTH), Block.UPDATE_ALL);
+                level.setBlock(org.haruyq.createmediasystems.lighting.ConsoleLayout.at(SECOND_CONSOLE, Direction.NORTH, x, 1, 1),
+                        org.haruyq.createmediasystems.lighting.LightingFeature.LIGHTING_MONITOR.get().defaultBlockState()
+                                .setValue(LightingMonitorBlock.FACING, Direction.NORTH), Block.UPDATE_ALL);
+            }
+        }
         for (int z = -3; z <= 14; z++) {
             set(level, -16, FLOOR + 1, z, Blocks.COBBLESTONE_WALL.defaultBlockState());
             for (int y = 1; y <= 3; y++) set(level, -12, FLOOR + y, z, Blocks.IRON_BARS.defaultBlockState());
@@ -418,11 +479,37 @@ public final class GpuProjectionDemo {
         if (window != phase) {
             if (phase >= 0) report();
             frameCount = gpuCount = 0; previousFrame = 0; phase = window;
+            productionNanos = productionSamples = 0;
+            var metrics = GpuLightProjection.metrics();
+            phaseShadows = metrics.shadowUpdates(); phaseSurfaces = metrics.surfaceDraws();
         }
         if (phase < 0) return;
         long now = System.nanoTime();
         if (previousFrame != 0 && frameCount < frames.length) frames[frameCount++] = (now - previousFrame) / 1e6;
         previousFrame = now;
+    }
+
+    public static void beginProduction() {
+        if (!ENABLED || !production() || phase < 0) return;
+        pollQueries();
+        int query = nextQuery;
+        productionQuery = !pending[query];
+        if (productionQuery) {
+            if (queries[query] == 0) queries[query] = GL15.glGenQueries();
+            GL15.glBeginQuery(GL33.GL_TIME_ELAPSED, queries[query]);
+        }
+        productionStart = System.nanoTime();
+    }
+
+    public static void endProduction() {
+        if (!ENABLED || !production() || phase < 0) return;
+        productionNanos += System.nanoTime() - productionStart;
+        productionSamples++;
+        if (productionQuery) {
+            GL15.glEndQuery(GL33.GL_TIME_ELAPSED);
+            pending[nextQuery] = true;
+            nextQuery = (nextQuery + 1) % queries.length;
+        }
     }
 
     private static void pollQueries() {
@@ -449,6 +536,14 @@ public final class GpuProjectionDemo {
                 percentile(sorted, .5), percentile(sorted, .95), percentile(sorted, .99), sorted[sorted.length - 1],
                 gpuCount, percentile(gpuSorted, .5), percentile(gpuSorted, .95));
         if ("cms".equals(MODE)) reportNativePath();
+        if (production()) {
+            var metrics = GpuLightProjection.metrics();
+            LogUtils.getLogger().info("PERF_PRODUCTION lights={} view={} samples={} render_cpu_mean_ms={} shadows_per_frame={} surfaces_per_frame={} depth_bytes={} geometry_bytes={} drawn_lights={}",
+                    LIGHT_COUNT, phase, productionSamples, productionSamples == 0 ? 0 : productionNanos / 1e6 / productionSamples,
+                    productionSamples == 0 ? 0 : (double) (metrics.shadowUpdates() - phaseShadows) / productionSamples,
+                    productionSamples == 0 ? 0 : (double) (metrics.surfaceDraws() - phaseSurfaces) / productionSamples,
+                    metrics.depthBytes(), GpuLightGeometry.bytes(), metrics.drawnLights());
+        }
     }
 
     private static void reportNativePath() {

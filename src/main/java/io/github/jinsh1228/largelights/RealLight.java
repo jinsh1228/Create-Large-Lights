@@ -101,9 +101,7 @@ public final class RealLight {
     }
 
     static void refresh(Level level, BlockPos pos, FloodlightBlock.Entity light) {
-        boolean full = light.placed.updated == Long.MIN_VALUE
-                || Math.floorMod(level.getGameTime() + pos.hashCode(), REFRESH) < CHECK;
-        var owner = full ? light.controller() : light.quickController();
+        var owner = light.controller();
         if (owner != null && !level.isClientSide) {
             ConsoleTimers.check(owner, level);
         }

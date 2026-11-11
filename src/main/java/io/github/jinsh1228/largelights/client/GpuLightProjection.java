@@ -37,7 +37,7 @@ import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 /** Shared terrain meshes and cached, per-light shadow maps; colour and intensity remain current every frame. */
 public final class GpuLightProjection {
     private static final int SHADOW_SIZE = 1024;
-    private static final int CACHED_SHADOWS = 16;
+    private static final int CACHED_SHADOWS = 128;
     private static final int FORGET_FRAMES = 600;
     private static final float NEAR = .25f;
     private static final Map<Long, Request> queued = new LinkedHashMap<>();
@@ -113,7 +113,7 @@ public final class GpuLightProjection {
         }
     }
 
-    /** False retains CMS rendering for incompatible worlds and while a fresh geometry snapshot is prepared. */
+    /** False retains CMS rendering for incompatible worlds and unsupported geometry. */
     public static boolean queue(FloodlightBlock.Entity lamp, Vec3 origin, Vec3 direction, Vec3 up,
                                 double halfAngle, float range, float strength, int color, int radius) {
         if (unavailable || !GpuProjectionLifecycle.allow(lamp.getLevel(), lamp.getBlockPos())
@@ -133,7 +133,7 @@ public final class GpuLightProjection {
         requested = true;
         try {
             GpuLightGeometry.Scene scene = GpuLightGeometry.select(mc.level, bounds, worldOrigin, direction, tangent, range, width);
-            if (!scene.ready()) return false;
+            if (!scene.ready()) return scene.pending();
             if (depth == null) {
                 try (GpuProjectionState ignored = new GpuProjectionState()) {
                     depth = new Program("depth.fsh");
@@ -179,8 +179,10 @@ public final class GpuLightProjection {
     /** Runs before CMS flushes its lens and haze buffers, on the main world's terrain framebuffer. */
     public static void render(RenderLevelStageEvent event) {
         if (queued.isEmpty() || unavailable) return;
+        queued.values().removeIf(request -> !visible(request, event.getFrustum()));
+        if (queued.isEmpty()) return;
         Minecraft mc = Minecraft.getInstance();
-        Set<Long> pinned = new HashSet<>();
+        Set<Long> pinned = queued.size() > CACHED_SHADOWS ? new HashSet<>() : Set.of();
         if (queued.size() > CACHED_SHADOWS) {
             for (long id : queued.keySet()) {
                 if (pinned.size() == CACHED_SHADOWS - 1) break;
@@ -282,6 +284,13 @@ public final class GpuLightProjection {
         }
         shadow.lastFrame = frame;
         return shadow;
+    }
+
+    private static boolean visible(Request request, Frustum frustum) {
+        for (GpuLightGeometry.Mesh mesh : request.scene.meshes()) {
+            if (mesh.receives() && frustum.isVisible(mesh.bounds())) return true;
+        }
+        return false;
     }
 
     private static void shadow(Request request, Shadow shadow) {

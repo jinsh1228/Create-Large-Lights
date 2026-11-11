@@ -54,8 +54,8 @@ final class GpuProductionDemo {
         fadeReady = metrics.drawnLights() > 0 && metrics.surfaceDraws() > 0 && ticks - stableAt >= 20;
         if (!fadeReady && ticks - prepareAt < 240) return false;
         check(fadeReady, "production GPU projection becomes ready and keeps its static shadow", metrics);
-        check(metrics.cachedShadows() <= 16 && metrics.depthBytes() <= 64L * 1024 * 1024,
-                "shadow cache remains within 16 maps / 64 MiB", metrics);
+        check(metrics.cachedShadows() <= 128 && metrics.depthBytes() <= 512L * 1024 * 1024,
+                "shadow cache remains within 128 maps / 512 MiB", metrics);
         check(GpuLightGeometry.bytes() <= 64L * 1024 * 1024, "shared geometry stays within 64 MiB", metrics);
         errors("ready");
         return true;

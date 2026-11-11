@@ -1,6 +1,7 @@
 package io.github.jinsh1228.largelights.client;
 
 import java.nio.FloatBuffer;
+import java.nio.IntBuffer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -20,6 +21,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import io.github.jinsh1228.largelights.mixin.MultipartModelAccessor;
 import io.github.jinsh1228.largelights.mixin.WeightedModelAccessor;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -47,6 +49,7 @@ import net.neoforged.neoforge.client.model.IQuadTransformer;
 public final class GpuLightGeometry {
     private static final int STRIDE = 14;
     private static final int[] TRIANGLES = {0, 1, 2, 0, 2, 3};
+    private static final int[] SHARED_CORNERS = {0, 1, 2, 5};
     private static final Direction[] DIRECTIONS = Direction.values();
     private static final int[][] BOX_FACES = {{0, 3, 2, 1}, {4, 5, 6, 7}, {0, 4, 7, 3},
             {1, 2, 6, 5}, {0, 1, 5, 4}, {3, 7, 6, 2}};
@@ -57,19 +60,24 @@ public final class GpuLightGeometry {
     private static final int MAX_SECTION_FLOATS = (8 << 20) / Float.BYTES;
     private static final long BUILD_NANOS = 2_000_000;
     private static final Scene NOT_READY = new Scene(List.of(), false, 0);
+    private static final Scene PENDING = new Scene(List.of(), false, 0, true);
     private static Cache cache;
 
     private GpuLightGeometry() {
     }
 
-    public record Scene(List<Mesh> meshes, boolean ready, long revision) {
+    public record Scene(List<Mesh> meshes, boolean ready, long revision, boolean pending) {
+        public Scene(List<Mesh> meshes, boolean ready, long revision) {
+            this(meshes, ready, revision, false);
+        }
     }
 
     public static final class Mesh {
         private final BlockPos origin;
         private final boolean receives;
         private final Mesh shared;
-        private int vao, vbo, vertices;
+        private int vao, vbo, ibo, vertices;
+        private long bytes;
         private Map<Long, Span> blocks = Map.of();
         private AABB bounds;
 
@@ -102,7 +110,7 @@ public final class GpuLightGeometry {
             Mesh data = shared == null ? this : shared;
             if (data.vao != 0) {
                 GL30.glBindVertexArray(data.vao);
-                GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, data.vertices);
+                data.drawRange(0, data.vertices);
             }
         }
 
@@ -113,10 +121,15 @@ public final class GpuLightGeometry {
                 draw();
             } else if (vao != 0) {
                 GL30.glBindVertexArray(vao);
-                if (span.start > 0) GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, span.start);
+                if (span.start > 0) drawRange(0, span.start);
                 int end = span.start + span.count;
-                if (end < vertices) GL11.glDrawArrays(GL11.GL_TRIANGLES, end, vertices - end);
+                if (end < vertices) drawRange(end, vertices - end);
             }
+        }
+
+        private void drawRange(int first, int count) {
+            if (ibo == 0) GL11.glDrawArrays(GL11.GL_TRIANGLES, first, count);
+            else GL11.glDrawElements(GL11.GL_TRIANGLES, count, GL11.GL_UNSIGNED_INT, first * (long) Integer.BYTES);
         }
 
         private void upload(FloatArrayList values) {
@@ -130,17 +143,32 @@ public final class GpuLightGeometry {
                 minZ = Math.min(minZ, vertices[vertex + 2]); maxZ = Math.max(maxZ, vertices[vertex + 2]);
             }
             bounds = new AABB(minX, minY, minZ, maxX, maxY, maxZ).move(origin).inflate(.001);
+            boolean indexed = packedBytes(values) < (long) values.size() * Float.BYTES;
+            IntArrayList indices = indexed ? new IntArrayList(values.size() / STRIDE) : null;
+            int packed = indexed ? compact(values, indices) : values.size();
             vao = GL30.glGenVertexArrays();
             vbo = GL15.glGenBuffers();
             this.vertices = values.size() / STRIDE;
+            bytes = (long) packed * Float.BYTES + (indexed ? (long) indices.size() * Integer.BYTES : 0);
             GL30.glBindVertexArray(vao);
             GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, vbo);
-            FloatBuffer data = MemoryUtil.memAllocFloat(values.size());
+            FloatBuffer data = MemoryUtil.memAllocFloat(packed);
             try {
-                data.put(values.elements(), 0, values.size()).flip();
+                data.put(values.elements(), 0, packed).flip();
                 GL15.glBufferData(GL15.GL_ARRAY_BUFFER, data, GL15.GL_STATIC_DRAW);
             } finally {
                 MemoryUtil.memFree(data);
+            }
+            if (indexed) {
+                ibo = GL15.glGenBuffers();
+                GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, ibo);
+                IntBuffer elements = MemoryUtil.memAllocInt(indices.size());
+                try {
+                    elements.put(indices.elements(), 0, indices.size()).flip();
+                    GL15.glBufferData(GL15.GL_ELEMENT_ARRAY_BUFFER, elements, GL15.GL_STATIC_DRAW);
+                } finally {
+                    MemoryUtil.memFree(elements);
+                }
             }
             int[] widths = {3, 2, 3, 3, 3};
             int offset = 0;
@@ -156,7 +184,10 @@ public final class GpuLightGeometry {
             if (shared != null) return;
             if (vao != 0) GL30.glDeleteVertexArrays(vao);
             if (vbo != 0) GL15.glDeleteBuffers(vbo);
-            vao = vbo = vertices = 0;
+            if (ibo != 0) GL15.glDeleteBuffers(ibo);
+            vao = vbo = ibo = vertices = 0;
+            bytes = 0;
+            blocks = Map.of();
         }
     }
 
@@ -177,7 +208,10 @@ public final class GpuLightGeometry {
             entry.full = null;
             entry.failed = false;
         }
-        cache.memberships.clear();
+        int x = SectionPos.x(key), y = SectionPos.y(key), z = SectionPos.z(key);
+        cache.memberships.entrySet().removeIf(member -> (entry == null || !member.getValue().entries.contains(entry))
+                && Cache.intersects(member.getKey(), x, y, z));
+        cache.epoch++;
     }
 
     public static void chunkChanged(int x, int z) {
@@ -189,7 +223,11 @@ public final class GpuLightGeometry {
                 entry.failed = false;
             }
         }
-        cache.memberships.clear();
+        cache.memberships.entrySet().removeIf(member -> member.getKey().bounds.maxX >= (x - 1) * 16.0
+                && member.getKey().bounds.minX <= (x + 2) * 16.0
+                && member.getKey().bounds.maxZ >= (z - 1) * 16.0
+                && member.getKey().bounds.minZ <= (z + 2) * 16.0);
+        cache.epoch++;
     }
 
     /** Enqueue demand; this method never deletes or uploads a selected mesh. */
@@ -198,23 +236,26 @@ public final class GpuLightGeometry {
         if (Minecraft.getInstance().level != level) return NOT_READY;
         if (cache == null || cache.level != level) {
             // The engine calls rebuild before selecting, so a world switch is handled there.
-            return NOT_READY;
+            return PENDING;
         }
         Query query = new Query(bounds, origin, direction, tangent, range, radius);
         Membership membership = cache.memberships.get(query);
         if (membership == null) {
             membership = cache.find(query);
-            if (cache.memberships.size() >= 64) cache.memberships.remove(cache.memberships.keySet().iterator().next());
+            if (membership == null) return NOT_READY;
+            if (cache.memberships.size() >= 256) cache.memberships.remove(cache.memberships.keySet().iterator().next());
             cache.memberships.put(query, membership);
         }
-        if (membership == null) return NOT_READY;
+        for (Entry entry : membership.entries) entry.used = cache.frame;
+        if (membership.scene != null && membership.scene.ready && membership.epoch == cache.epoch) return membership.scene;
         List<Mesh> meshes = new ArrayList<>(membership.entries.size() + membership.unknown.size());
         boolean ready = membership.unknown.isEmpty() || cache.unknown.vao != 0;
+        boolean supported = true;
         long revision = 0xcbf29ce484222325L;
         for (Entry entry : membership.entries) {
-            entry.used = cache.frame;
             if (entry.built != entry.generation) {
                 ready = false;
+                if (entry.failed || cache.frame < entry.retryAt) supported = false;
                 if (!entry.queued && !entry.failed && cache.frame >= entry.retryAt && cache.pending.size() < MAX_METADATA) {
                     entry.queued = true;
                     cache.pending.addLast(entry);
@@ -229,7 +270,8 @@ public final class GpuLightGeometry {
             meshes.add(unknown);
             revision = (revision ^ unknown.origin.asLong()) * 0x100000001b3L;
         }
-        return new Scene(List.copyOf(meshes), ready, revision);
+        membership.epoch = cache.epoch;
+        return membership.scene = new Scene(List.copyOf(meshes), ready, revision, !ready && supported);
     }
 
     /** One incremental builder and one budget for the whole frame, rather than one scan per light. */
@@ -262,7 +304,16 @@ public final class GpuLightGeometry {
     private record Span(int start, int count) {
     }
 
-    private record Membership(List<Entry> entries, List<Mesh> unknown) {
+    private static final class Membership {
+        final List<Entry> entries;
+        final List<Mesh> unknown;
+        Scene scene;
+        long epoch;
+
+        Membership(List<Entry> entries, List<Mesh> unknown) {
+            this.entries = entries;
+            this.unknown = unknown;
+        }
     }
 
     private static final class Entry {
@@ -286,7 +337,7 @@ public final class GpuLightGeometry {
         final Map<BlockState, Boolean> fullStates = new HashMap<>();
         final ArrayDeque<Entry> pending = new ArrayDeque<>();
         final Mesh unknown = new Mesh(BlockPos.ZERO, false);
-        long frame = Long.MIN_VALUE, bytes;
+        long frame = Long.MIN_VALUE, bytes, epoch;
         boolean needsUnknown;
         Build building;
 
@@ -362,7 +413,8 @@ public final class GpuLightGeometry {
                 FloatArrayList values = new FloatArrayList();
                 box(values, 0, 0, 0, 16, level.getHeight(), 16);
                 unknown.upload(values);
-                bytes += (long) values.size() * Float.BYTES;
+                bytes += unknown.bytes;
+                epoch++;
             }
             // Retire old metadata and buffers only when no projector requested them in the previous frame.
             if (sections.size() >= MAX_METADATA) {
@@ -410,7 +462,7 @@ public final class GpuLightGeometry {
                 entry.failed = true;
                 return;
             }
-            long size = ((long) build.surface.size() + build.caster.size()) * Float.BYTES;
+            long size = packedBytes(build.surface) + packedBytes(build.caster);
             for (Entry old : sections.values()) {
                 if (bytes - entry.bytes + size <= MAX_BYTES) break;
                 if (old != entry && old.used < frame - 1) release(old);
@@ -441,6 +493,7 @@ public final class GpuLightGeometry {
             bytes -= entry.bytes;
             entry.bytes = 0;
             entry.built = 0;
+            epoch++;
         }
 
         private boolean full(long key) {
@@ -577,6 +630,38 @@ public final class GpuLightGeometry {
                 if (surface.size() + caster.size() > MAX_SECTION_FLOATS) tooLarge = true;
             }
         }
+    }
+
+    /** Exact sharing within a quad only: non-planar faces retain their distinct per-triangle attributes. */
+    static int compact(FloatArrayList values, IntArrayList indices) {
+        float[] data = values.elements();
+        int packed = 0;
+        for (int base = 0; base < values.size(); base += 6 * STRIDE) {
+            boolean shared = shared(data, base);
+            int first = packed / STRIDE;
+            for (int corner = 0; corner < (shared ? 4 : 6); corner++) {
+                int source = base + (shared ? SHARED_CORNERS[corner] : corner) * STRIDE;
+                System.arraycopy(data, source, data, packed, STRIDE);
+                packed += STRIDE;
+            }
+            for (int corner = 0; corner < 6; corner++) indices.add(first + (shared ? TRIANGLES[corner] : corner));
+        }
+        return packed;
+    }
+
+    static long packedBytes(FloatArrayList values) {
+        long vertices = 0;
+        for (int base = 0; base < values.size(); base += 6 * STRIDE) vertices += shared(values.elements(), base) ? 4 : 6;
+        return Math.min((long) values.size() * Float.BYTES,
+                vertices * STRIDE * Float.BYTES + (long) values.size() / STRIDE * Integer.BYTES);
+    }
+
+    private static boolean shared(float[] data, int base) {
+        for (int attribute = 0; attribute < STRIDE; attribute++) {
+            if (Float.floatToRawIntBits(data[base + attribute]) != Float.floatToRawIntBits(data[base + 3 * STRIDE + attribute])
+                    || Float.floatToRawIntBits(data[base + 2 * STRIDE + attribute]) != Float.floatToRawIntBits(data[base + 4 * STRIDE + attribute])) return false;
+        }
+        return true;
     }
 
     private static void append(FloatArrayList out, BakedQuad quad, Vec3 offset, int tint) {

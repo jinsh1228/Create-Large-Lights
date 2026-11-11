@@ -129,7 +129,7 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
         }
         Player player = context.getPlayer();
         if (!level.isClientSide) {
-            if (light.console != null) {
+            if (light.console() != null) {
                 if (player != null) {
                     player.displayClientMessage(Component.translatable("create_large_lights.message.linked_wrench"), true);
                 }
@@ -240,6 +240,7 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
         /** As {@link #beam()}, run by {@code owner} (this floodlight's controller, or null). */
         public Beam beam(@Nullable LightingConsoleBlock.Entity owner) {
             if (owner != null) {
+                int group = owner.group(worldPosition);
                 LightingSettings.Group settings = owner.settings.groups[group];
                 float strength = owner.formed && owner.settings.enabled ? owner.settings.master * settings.brightness : 0;
                 float[] aim = Aim.offset(yaw, pitch, settings.pan, settings.tilt,
@@ -251,7 +252,7 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
                         Mth.clamp(settings.range, 2, LightingSettings.MAX_RANGE), aim[0], aim[1], view.lightLimit(group));
             }
             // Linked to a console that isn't here (unloaded): dark till it is.
-            float strength = console != null ? 0 : getBlockState().getValue(POWER) / 15f;
+            float strength = console() != null ? 0 : getBlockState().getValue(POWER) / 15f;
             return new Beam(null, null, strength, spreadDegrees(), kind().range, yaw, pitch, 15);
         }
 
@@ -262,20 +263,6 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
                 spread = kind().defaultSpread;
             }
             changed();
-        }
-
-        /**
-         * Its controller as the server looks at it often: the console it names, if that console still runs it.
-         * Without CMS's link repair (controller()), which looks over all the console's fixtures; the console runs
-         * that itself every second, and RealLight asks controller() now and then for consoles that moved.
-         */
-        @Nullable
-        LightingConsoleBlock.Entity quickController() {
-            if (console == null || level == null || !level.isLoaded(console)
-                    || !(level.getBlockEntity(console) instanceof LightingConsoleBlock.Entity owner)) {
-                return null;
-            }
-            return owner.controller() == owner && owner.fixtures.contains(worldPosition) ? owner : null;
         }
 
         /** Legacy light blocks awaiting migration, as BlockPos.asLong. */
