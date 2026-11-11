@@ -9,6 +9,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.SectionPos;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
@@ -59,9 +60,8 @@ public final class LightFieldUpdates {
                         continue;
                     }
                     for (int y = minY; y <= maxY; y++) {
-                        if (!chunk.getSection(y - level.getMinSection()).hasOnlyAir()) {
-                            pending.add(SectionPos.asLong(x, y, z));
-                        }
+                        // Empty terrain sections can still contain instanced models and their light samples.
+                        pending.add(SectionPos.asLong(x, y, z));
                     }
                 }
             }
@@ -86,7 +86,7 @@ public final class LightFieldUpdates {
             int x = SectionPos.x(section), y = SectionPos.y(section), z = SectionPos.z(section);
             // ViewArea wraps section coordinates, so never dirty a section outside the current view grid.
             if (Math.abs(x - cameraX) <= distance && Math.abs(z - cameraZ) <= distance) {
-                mc.levelRenderer.setSectionDirty(x, y, z);
+                mc.level.getChunkSource().onLightUpdate(LightLayer.BLOCK, SectionPos.of(x, y, z));
                 rebuilt++;
             }
         }

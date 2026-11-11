@@ -10,6 +10,7 @@
   "client": [
     "FloodlightVisibilityMixin",
     "FloodlightGlobalRendererMixin",
+    "FlywheelLightMixin",
     "LightingRaycastMixin",
     "LightingSurfaceScanMixin",
     "MultipartModelAccessor",

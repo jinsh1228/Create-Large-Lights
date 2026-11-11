@@ -7,6 +7,7 @@ import java.util.Set;
 import java.util.WeakHashMap;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongIterator;
@@ -17,6 +18,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.DataLayer;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
@@ -80,9 +82,13 @@ public final class LightFieldNetwork {
 
     private static final class ClientState {
         final Long2ObjectOpenHashMap<byte[]> values = new Long2ObjectOpenHashMap<>();
+        final Long2ObjectLinkedOpenHashMap<MergedLayer> merged = new Long2ObjectLinkedOpenHashMap<>();
         final LongLinkedOpenHashSet missing = new LongLinkedOpenHashSet();
         final LongOpenHashSet requested = new LongOpenHashSet();
         final LongOpenHashSet activeChunks = new LongOpenHashSet();
+    }
+
+    private record MergedLayer(DataLayer vanilla, byte[] values, DataLayer light) {
     }
 
     private static ClientState client(Level level) {
@@ -94,29 +100,59 @@ public final class LightFieldNetwork {
         if (level.isOutsideBuildHeight(pos)) {
             return 0;
         }
-        byte[] values;
-        synchronized (clients) {
-            ClientState state = client(level);
-            long section = SectionPos.asLong(pos);
-            if (!state.activeChunks.contains(chunk(section))) {
-                return 0;
-            }
-            if (level.getChunkSource().getChunkForLighting(pos.getX() >> 4, pos.getZ() >> 4) == null) {
-                return 0;
-            }
-            values = state.values.get(section);
-            if (values == null) {
-                if (state.requested.add(section)) {
-                    state.missing.add(section);
-                }
-                return 0;
-            }
-        }
-        if (values.length == 0) {
+        byte[] values = values(level, SectionPos.asLong(pos));
+        if (values == null || values.length == 0) {
             return 0;
         }
         int cell = (pos.getY() & 15) << 8 | (pos.getZ() & 15) << 4 | pos.getX() & 15;
         return values[cell >> 1] >> ((cell & 1) << 2) & 15;
+    }
+
+    private static byte[] values(Level level, long section) {
+        if (SectionPos.y(section) < level.getMinSection() || SectionPos.y(section) >= level.getMaxSection()) return null;
+        synchronized (clients) {
+            ClientState state = client(level);
+            if (!state.activeChunks.contains(chunk(section))) {
+                return null;
+            }
+            if (level.getChunkSource().getChunkForLighting(SectionPos.x(section), SectionPos.z(section)) == null) {
+                return null;
+            }
+            byte[] values = state.values.get(section);
+            if (values == null) {
+                if (state.requested.add(section)) {
+                    state.missing.add(section);
+                }
+            }
+            return values;
+        }
+    }
+
+    /** Read-only section view for bulk renderers. Never put fixture light in vanilla propagation or saved data. */
+    public static DataLayer section(Level level, long section, DataLayer vanilla) {
+        if (!level.isClientSide) return vanilla;
+        byte[] values = values(level, section);
+        if (values == null || values.length == 0) return vanilla;
+        synchronized (clients) {
+            ClientState state = client(level);
+            MergedLayer cached = state.merged.getAndMoveToLast(section);
+            if (cached != null && cached.vanilla == vanilla && cached.values == values) return cached.light;
+            DataLayer light = merge(vanilla, values);
+            if (cached == null && state.merged.size() >= LightField.CACHE_SECTIONS) state.merged.removeFirst();
+            state.merged.put(section, new MergedLayer(vanilla, values, light));
+            return light;
+        }
+    }
+
+    static DataLayer merge(DataLayer vanilla, byte[] values) {
+        if (vanilla == null || vanilla.isEmpty()) return new DataLayer(values.clone());
+        DataLayer light = vanilla.copy();
+        byte[] data = light.getData();
+        for (int i = 0; i < data.length; i++) {
+            int a = data[i] & 255, b = values[i] & 255;
+            data[i] = (byte) (Math.max(a & 15, b & 15) | Math.max(a >> 4, b >> 4) << 4);
+        }
+        return light;
     }
 
     /** Main client thread only. A sample query never sends a packet from a mesh worker. */
@@ -143,6 +179,7 @@ public final class LightFieldNetwork {
                 return;
             }
             state.values.put(section, values);
+            state.merged.remove(section);
             state.requested.add(section);
             state.missing.remove(section);
         }
@@ -161,6 +198,7 @@ public final class LightFieldNetwork {
     private static void discard(ClientState state, long chunk) {
         state.activeChunks.remove(chunk);
         state.values.keySet().removeIf((java.util.function.LongPredicate) id -> chunk(id) == chunk);
+        state.merged.keySet().removeIf((java.util.function.LongPredicate) id -> chunk(id) == chunk);
         state.missing.removeIf((java.util.function.LongPredicate) id -> chunk(id) == chunk);
         state.requested.removeIf((java.util.function.LongPredicate) id -> chunk(id) == chunk);
     }

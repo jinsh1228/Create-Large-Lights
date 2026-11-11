@@ -8,10 +8,13 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import io.github.jinsh1228.largelights.LightField;
+import io.github.jinsh1228.largelights.LightFieldNetwork;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.chunk.LightChunkGetter;
+import net.minecraft.world.level.chunk.DataLayer;
 import net.minecraft.world.level.lighting.BlockLightEngine;
 import net.minecraft.world.level.lighting.LightEngine;
 
@@ -24,6 +27,13 @@ abstract class LightEngineMixin {
     private void createLargeLights$light(BlockPos pos, CallbackInfoReturnable<Integer> cir) {
         if ((Object) this instanceof BlockLightEngine && chunkSource.getLevel() instanceof Level level) {
             cir.setReturnValue(Math.max(cir.getReturnValue(), Math.min(15, LightField.sample(level, pos))));
+        }
+    }
+
+    @Inject(method = "getDataLayerData", at = @At("RETURN"), cancellable = true)
+    private void createLargeLights$section(SectionPos section, CallbackInfoReturnable<DataLayer> cir) {
+        if ((Object) this instanceof BlockLightEngine && chunkSource.getLevel() instanceof Level level && level.isClientSide) {
+            cir.setReturnValue(LightFieldNetwork.section(level, section.asLong(), cir.getReturnValue()));
         }
     }
 }

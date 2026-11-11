@@ -22,12 +22,14 @@ import net.minecraft.client.gui.screens.AccessibilityOnboardingScreen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
+import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.WorldDataConfiguration;
 import net.minecraft.world.level.block.Block;
@@ -38,6 +40,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.Half;
 import net.minecraft.world.level.block.state.properties.SlabType;
+import net.minecraft.world.level.chunk.DataLayer;
 import net.minecraft.world.level.levelgen.WorldOptions;
 import net.minecraft.world.level.levelgen.presets.WorldPresets;
 import net.minecraft.world.phys.Vec3;
@@ -52,6 +55,7 @@ import net.neoforged.neoforge.event.tick.LevelTickEvent;
 import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
 import org.haruyq.createmediasystems.lighting.LightingMonitorBlock;
 import org.haruyq.createmediasystems.lighting.LightingRaycast;
+import org.lwjgl.system.MemoryUtil;
 
 /**
  * Dev only (-PshapeDemo): repeatable partial-block projection scene. Screenshots are taken externally through
@@ -447,6 +451,7 @@ public final class ShapeLightingDemo {
                 "client illumination " + (expected.enabled ? "arrives" : "clears after switch-off")
                         + "; field=" + Arrays.toString(field) + ", expected=" + Arrays.toString(expected.field)
                         + ", block=" + Arrays.toString(block) + ", waited=" + waited + " ticks");
+        checkSectionLight(mc, expected.block);
         server.execute(() -> LogUtils.getLogger().info("SHAPE FIELD SYNC metrics {}",
                 LightFieldNetwork.metrics(server.overworld())));
         if (expected.enabled) {
@@ -455,6 +460,37 @@ public final class ShapeLightingDemo {
             if (syncPhase == 2) FieldFadeDemo.start(mc, CONSOLE, SYNC_POINTS[0]);
         } else {
             syncPhase = 4;
+        }
+    }
+
+    /** Exercise bulk light consumers too: Flywheel's fast collector bypasses individual light queries. */
+    private static void checkSectionLight(Minecraft mc, int[] expected) {
+        int[] section = new int[SYNC_POINTS.length], flywheel = new int[SYNC_POINTS.length];
+        try {
+            Class<?> type = Class.forName("dev.engine_room.flywheel.backend.engine.LightDataCollector");
+            Class<?> storage = Class.forName("dev.engine_room.flywheel.backend.engine.LightStorage");
+            Object collector = type.getMethod("of", LevelAccessor.class).invoke(null, mc.level);
+            check(collector.getClass().getName().endsWith("$Fast"), "Flywheel retains its fast light collector");
+            long memory = MemoryUtil.nmemCalloc(1, storage.getField("SECTION_SIZE_BYTES").getInt(null));
+            try {
+                for (int i = 0; i < SYNC_POINTS.length; i++) {
+                    BlockPos pos = SYNC_POINTS[i];
+                    SectionPos at = SectionPos.of(pos);
+                    DataLayer data = mc.level.getLightEngine().getLayerListener(LightLayer.BLOCK).getDataLayerData(at);
+                    section[i] = data == null ? 0 : data.get(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15);
+                    type.getMethod("collectSection", long.class, long.class).invoke(collector, memory, at.asLong());
+                    int index = ((pos.getY() & 15) + 1) * 18 * 18 + ((pos.getZ() & 15) + 1) * 18 + (pos.getX() & 15) + 1;
+                    flywheel[i] = MemoryUtil.memGetByte(memory + storage.getField("SOLID_SIZE_BYTES").getInt(null) + index) & 15;
+                }
+            } finally {
+                MemoryUtil.nmemFree(memory);
+            }
+            check(Arrays.equals(section, expected), "section light agrees with point queries: "
+                    + Arrays.toString(section) + ", expected=" + Arrays.toString(expected));
+            check(Arrays.equals(flywheel, expected), "Flywheel light agrees with point queries: "
+                    + Arrays.toString(flywheel) + ", expected=" + Arrays.toString(expected));
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException("Cannot inspect Flywheel light data", failure);
         }
     }
 
