@@ -1,18 +1,15 @@
 package io.github.jinsh1228.largelights.dev;
 
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
 import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
 import org.haruyq.createmediasystems.lighting.LightingMonitorBlock;
-import org.haruyq.createmediasystems.lighting.LightingIllumination;
 
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
@@ -100,8 +97,6 @@ public final class GpuProjectionDemo {
     private static boolean ready;
     private static volatile boolean linked;
     private static boolean configurationChecked;
-    private static boolean nativeLocated;
-    private static Field nativeBeams, nativeGpu;
 
     private record Projector(Matrix4f projection, Vector3f origin, Vector3f direction, Vector3f right,
                              Vector3f up, float tangent, float range, float strength, int color,
@@ -114,6 +109,8 @@ public final class GpuProjectionDemo {
     public static boolean production() {
         return "production".equals(MODE);
     }
+
+    public static boolean cms() { return "cms".equals(MODE); }
 
     public static boolean gpu() {
         return ENABLED && GPU;
@@ -541,7 +538,6 @@ public final class GpuProjectionDemo {
                 MODE, vertical() ? "vertical" : "oblique", LIGHT_COUNT, phase, SIZE, frameCount,
                 percentile(sorted, .5), percentile(sorted, .95), percentile(sorted, .99), sorted[sorted.length - 1],
                 gpuCount, percentile(gpuSorted, .5), percentile(gpuSorted, .95));
-        if ("cms".equals(MODE)) reportNativePath();
         if (production()) {
             var metrics = GpuLightProjection.metrics();
             LogUtils.getLogger().info("PERF_PRODUCTION lights={} view={} samples={} render_cpu_mean_ms={} shadows_per_frame={} surfaces_per_frame={} depth_bytes={} geometry_bytes={} drawn_lights={}",
@@ -552,36 +548,6 @@ public final class GpuProjectionDemo {
         }
     }
 
-    private static void reportNativePath() {
-        int cpu = 0, gpu = 0, unknown = 0;
-        try {
-            if (!nativeLocated) {
-                nativeLocated = true;
-                nativeBeams = LightingIllumination.class.getDeclaredField("BEAMS");
-                nativeBeams.setAccessible(true);
-                try {
-                    nativeGpu = Class.forName(LightingIllumination.class.getName() + "$Beam").getDeclaredField("gpu");
-                    nativeGpu.setAccessible(true);
-                } catch (NoSuchFieldException absentBeforeGpuPath) {
-                    // CMS 1.2.0 has only the CPU surface path.
-                }
-            }
-            Map<?, ?> beams = (Map<?, ?>) nativeBeams.get(null);
-            for (BlockPos pos : LAMPS) {
-                Object fixture = Minecraft.getInstance().level.getBlockEntity(pos);
-                Object beam = beams.get(fixture);
-                if (beam == null) unknown++;
-                else if (nativeGpu != null && nativeGpu.getBoolean(beam)) gpu++;
-                else cpu++;
-            }
-        } catch (ReflectiveOperationException | RuntimeException error) {
-            cpu = gpu = 0;
-            unknown = LIGHT_COUNT;
-            LogUtils.getLogger().warn("GPU_TRIAL_NATIVE path inspection failed", error);
-        }
-        LogUtils.getLogger().info("GPU_TRIAL_NATIVE mode={} angle={} lights={} view={} cpu={} gpu={} unknown={} gpu_field={}",
-                MODE, vertical() ? "vertical" : "oblique", LIGHT_COUNT, phase, cpu, gpu, unknown, nativeGpu != null);
-    }
 
     private static double percentile(double[] values, double q) {
         return values.length == 0 ? Double.NaN : values[Math.min(values.length - 1, (int) Math.floor((values.length - 1) * q))];

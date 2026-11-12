@@ -4,7 +4,7 @@
   "package": "io.github.jinsh1228.largelights.dev.mixin",
   "compatibilityLevel": "JAVA_21",
   "client": [
-    "GpuProjectionMixin",
+    "OpticsTrialMixin",
     "ProductionProjectionTrialMixin"
   ],
   "injectors": {

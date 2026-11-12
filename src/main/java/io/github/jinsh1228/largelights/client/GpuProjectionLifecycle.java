@@ -2,10 +2,10 @@ package io.github.jinsh1228.largelights.client;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.logging.LogUtils;
-import org.haruyq.createmediasystems.SableCompat;
-import org.haruyq.createmediasystems.client.IrisCompat;
-import org.haruyq.createmediasystems.lighting.LightingIllumination;
-import org.haruyq.createmediasystems.lighting.LightingRaycast;
+import org.haruyq.createmediasystems.api.sublevel.SubLevels;
+import org.haruyq.createmediasystems.api.client.Shaders;
+import org.haruyq.createmediasystems.api.client.WorldChanges;
+import org.haruyq.createmediasystems.api.lighting.client.LightRays;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
@@ -19,7 +19,6 @@ import net.neoforged.neoforge.client.event.RenderFrameEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.GameShuttingDownEvent;
-import net.neoforged.neoforge.event.level.ChunkEvent;
 import net.neoforged.neoforge.event.level.LevelEvent;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 
@@ -27,7 +26,7 @@ import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 public final class GpuProjectionLifecycle {
     private static Boolean capable;
     private static boolean compatFailed, packActive;
-    private static LightingRaycast spatial;
+    private static LightRays spatial;
     private static Level spatialLevel;
     private static long spatialFrame = Long.MIN_VALUE;
 
@@ -38,7 +37,7 @@ public final class GpuProjectionLifecycle {
         NeoForge.EVENT_BUS.addListener((RenderFrameEvent.Pre event) -> {
             if (capable == null) capable = GpuProjectionState.supported();
             boolean previousPack = packActive;
-            packActive = IrisCompat.shaderPackInUse();
+            packActive = Shaders.packInUse();
             if (packActive && !previousPack) clear();
             if (capable && !packActive && !compatFailed) GpuLightProjection.beginFrame();
         });
@@ -50,12 +49,6 @@ public final class GpuProjectionLifecycle {
         NeoForge.EVENT_BUS.addListener((LevelEvent.Unload event) -> {
             if (event.getLevel().isClientSide()) clear();
         });
-        NeoForge.EVENT_BUS.addListener((ChunkEvent.Unload event) -> {
-            if (event.getLevel().isClientSide()) {
-                var pos = event.getChunk().getPos();
-                Minecraft.getInstance().execute(() -> GpuLightGeometry.chunkChanged(pos.x, pos.z));
-            }
-        });
         NeoForge.EVENT_BUS.addListener((GameShuttingDownEvent event) -> clear());
         modBus.addListener((RegisterClientReloadListenersEvent event) -> event.registerReloadListener(
                 (ResourceManagerReloadListener) resources -> clear()));
@@ -64,7 +57,7 @@ public final class GpuProjectionLifecycle {
     public static boolean allow(Level level, BlockPos source) {
         if (level == null || level != Minecraft.getInstance().level || !Boolean.TRUE.equals(capable) || packActive || compatFailed) return false;
         try {
-            return SableCompat.containing(level, source) == null;
+            return !SubLevels.onSubLevel(level, source);
         } catch (RuntimeException | LinkageError failure) {
             failed(failure);
             return false;
@@ -75,9 +68,9 @@ public final class GpuProjectionLifecycle {
     static boolean staticGeometry(Level level, AABB bounds) {
         if (compatFailed) return false;
         try {
-            long frame = LightingIllumination.frame();
+            long frame = WorldChanges.frame();
             if (spatial == null || spatialLevel != level || spatialFrame != frame) {
-                spatial = LightingRaycast.rendered(level, BlockPos.ZERO);
+                spatial = LightRays.rendered(level, BlockPos.ZERO);
                 spatialLevel = level;
                 spatialFrame = frame;
             }

@@ -11,8 +11,6 @@
     "FloodlightVisibilityMixin",
     "FloodlightGlobalRendererMixin",
     "FlywheelLightMixin",
-    "LightingRaycastMixin",
-    "LightingSurfaceScanMixin",
     "MultipartModelAccessor",
     "WeightedModelAccessor",
     "LightModelDataMixin"

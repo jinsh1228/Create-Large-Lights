@@ -5,7 +5,7 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.WeakHashMap;
 
-import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
+import org.haruyq.createmediasystems.api.lighting.ConsoleView;
 import org.haruyq.createmediasystems.lighting.LightingSettings;
 
 import net.minecraft.nbt.CompoundTag;
@@ -38,7 +38,7 @@ public final class ConsoleSettings {
     private static final float[] SCENE_LEVELS = {1, 0.6f, 0.3f, 0};
     private static final String[] GROUP_KEYS = new String[LightingSettings.GROUPS];
     /** Each console's settings as last read, by console: the client's and the server's are separate entities. */
-    private static final Map<LightingConsoleBlock.Entity, View> VIEWS = Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<ConsoleView, View> VIEWS = Collections.synchronizedMap(new WeakHashMap<>());
 
     static {
         for (int i = 0; i < GROUP_KEYS.length; i++) {
@@ -70,7 +70,7 @@ public final class ConsoleSettings {
     }
 
     /** {@code console}'s settings now. */
-    public static View view(LightingConsoleBlock.Entity console) {
+    public static View view(ConsoleView console) {
         CompoundTag root = console.extras(KEY);
         int revision = root.getInt("Rev");
         View view = VIEWS.get(console);
@@ -133,58 +133,58 @@ public final class ConsoleSettings {
 
     // Reading, as the rest of the mod asks.
 
-    public static float spread(LightingConsoleBlock.Entity console, int group) {
+    public static float spread(ConsoleView console, int group) {
         return view(console).spread[group];
     }
 
-    public static boolean realLight(LightingConsoleBlock.Entity console, int group) {
+    public static boolean realLight(ConsoleView console, int group) {
         return view(console).realLight[group];
     }
 
     /** The brightest a group's floodlights light the world, as a light level. */
-    public static int maxLevel(LightingConsoleBlock.Entity console, int group) {
+    public static int maxLevel(ConsoleView console, int group) {
         return view(console).maxLevel[group];
     }
 
     /** How a group's floodlights may light the world: their light level at most, 0 for not at all. */
-    public static int lightLimit(LightingConsoleBlock.Entity console, int group) {
+    public static int lightLimit(ConsoleView console, int group) {
         return view(console).lightLimit(group);
     }
 
     /** Seconds a recalled scene takes to fade in. */
-    public static float fade(LightingConsoleBlock.Entity console) {
+    public static float fade(ConsoleView console) {
         return view(console).fade;
     }
 
     /** Scene {@code index}: each group's brightness, then the master (SCENE_SIZE values, 0 to 1). A copy. */
-    public static float[] scene(LightingConsoleBlock.Entity console, int index) {
+    public static float[] scene(ConsoleView console, int index) {
         return view(console).scenes[index].clone();
     }
 
     /** The scene last recalled or saved, or -1. */
-    public static int scene(LightingConsoleBlock.Entity console) {
+    public static int scene(ConsoleView console) {
         return view(console).scene;
     }
 
     /** The console's brightnesses and master now, as a scene. */
-    public static float[] current(LightingConsoleBlock.Entity console) {
+    public static float[] current(ConsoleView console) {
         float[] scene = new float[SCENE_SIZE];
         for (int i = 0; i < LightingSettings.GROUPS; i++) {
-            scene[i] = console.settings.groups[i].brightness;
+            scene[i] = console.groupSettings(i).brightness();
         }
-        scene[SCENE_SIZE - 1] = console.settings.master;
+        scene[SCENE_SIZE - 1] = console.master();
         return scene;
     }
 
     // Changing, on the server: each bumps the revision, so views are read again.
 
-    private static CompoundTag edit(LightingConsoleBlock.Entity console) {
+    private static CompoundTag edit(ConsoleView console) {
         CompoundTag root = console.extras(KEY);
         root.putInt("Rev", root.getInt("Rev") + 1);
         return root;
     }
 
-    private static CompoundTag group(LightingConsoleBlock.Entity console, int group) {
+    private static CompoundTag group(ConsoleView console, int group) {
         CompoundTag root = edit(console);
         if (!root.contains(GROUP_KEYS[group], Tag.TAG_COMPOUND)) {
             root.put(GROUP_KEYS[group], new CompoundTag());
@@ -192,23 +192,23 @@ public final class ConsoleSettings {
         return root.getCompound(GROUP_KEYS[group]);
     }
 
-    public static void setSpread(LightingConsoleBlock.Entity console, int group, float spread) {
+    public static void setSpread(ConsoleView console, int group, float spread) {
         group(console, group).putFloat("Spread", Mth.clamp(spread, 1, MAX_SPREAD));
     }
 
-    public static void setRealLight(LightingConsoleBlock.Entity console, int group, boolean on) {
+    public static void setRealLight(ConsoleView console, int group, boolean on) {
         group(console, group).putBoolean("RealLight", on);
     }
 
-    public static void setMaxLevel(LightingConsoleBlock.Entity console, int group, int level) {
+    public static void setMaxLevel(ConsoleView console, int group, int level) {
         group(console, group).putInt("MaxLevel", Mth.clamp(level, 1, 15));
     }
 
-    public static void setFade(LightingConsoleBlock.Entity console, float seconds) {
+    public static void setFade(ConsoleView console, float seconds) {
         edit(console).putFloat("Fade", Mth.clamp(seconds, 0, MAX_FADE));
     }
 
-    public static void saveScene(LightingConsoleBlock.Entity console, int index) {
+    public static void saveScene(ConsoleView console, int index) {
         float[][] scenes = view(console).scenes;
         CompoundTag root = edit(console);
         ListTag list = new ListTag();
@@ -223,16 +223,16 @@ public final class ConsoleSettings {
         root.putInt("Scene", index);
     }
 
-    public static void setScene(LightingConsoleBlock.Entity console, int index) {
+    public static void setScene(ConsoleView console, int index) {
         edit(console).putInt("Scene", index);
     }
 
-    public static void setTimersOn(LightingConsoleBlock.Entity console, boolean on) {
+    public static void setTimersOn(ConsoleView console, boolean on) {
         edit(console).putBoolean("TimersOn", on);
     }
 
     /** Sets timer {@code index}; null leaves that part as it was. */
-    public static void setTimer(LightingConsoleBlock.Entity console, int index, Boolean on, Integer time, Integer scene) {
+    public static void setTimer(ConsoleView console, int index, Boolean on, Integer time, Integer scene) {
         Timer[] timers = view(console).timers;
         Timer old = timers[index];
         timers = timers.clone();

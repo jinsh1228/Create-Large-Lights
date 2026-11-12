@@ -1,6 +1,6 @@
 package io.github.jinsh1228.largelights.client;
 
-import org.haruyq.createmediasystems.SableCompat;
+import org.haruyq.createmediasystems.api.sublevel.SubLevels;
 import org.jetbrains.annotations.Nullable;
 
 import io.github.jinsh1228.largelights.AimPacket;
@@ -87,7 +87,7 @@ public final class FloodlightAiming {
         }
         long elapsed = mc.level.getGameTime() - started;
         if (elapsed > TIMEOUT || elapsed < 0 || !(mc.level.getBlockEntity(aiming) instanceof FloodlightBlock.Entity)
-                || mc.player.distanceToSqr(SableCompat.toWorld(mc.level, aiming, aiming.getCenter()))
+                || mc.player.distanceToSqr(SubLevels.toWorld(mc.level, aiming, aiming.getCenter()))
                 > AimPacket.PLAYER_REACH * AimPacket.PLAYER_REACH) {
             stop("create_large_lights.message.aim_cancelled");
         } else if (elapsed % 20 == 0) {

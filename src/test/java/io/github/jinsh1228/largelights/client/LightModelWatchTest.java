@@ -8,6 +8,19 @@ import org.junit.jupiter.api.Test;
 
 class LightModelWatchTest {
     @Test
+    void cmsPublicWorldChangesInvalidateTheAddonsCachedModels() {
+        FloodlightOptics.register();
+        LightModelSnapshots.clear();
+        Object near = new Object(), far = new Object();
+        AABB local = new AABB(0, 64, 0, 16, 80, 16), remote = local.move(512, 0, 0);
+        long first = LightModelSnapshots.watch(near, local), other = LightModelSnapshots.watch(far, remote);
+        org.haruyq.createmediasystems.api.client.WorldChanges.blocksChanged(4, 70, 4, 4, 70, 4);
+        assertNotEquals(first, LightModelSnapshots.watch(near, local));
+        assertEquals(other, LightModelSnapshots.watch(far, remote));
+        LightModelSnapshots.clear();
+    }
+
+    @Test
     void onlyLocalChangesAndResourceReloadInvalidateAStationaryBeam() {
         LightModelSnapshots.clear();
         Object near = new Object(), far = new Object();

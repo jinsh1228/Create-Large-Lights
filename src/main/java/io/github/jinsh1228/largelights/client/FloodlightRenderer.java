@@ -2,11 +2,13 @@ package io.github.jinsh1228.largelights.client;
 
 import org.haruyq.createmediasystems.CreateMediaSystems;
 import org.haruyq.createmediasystems.Rgb;
-import org.haruyq.createmediasystems.client.IrisCompat;
-import org.haruyq.createmediasystems.SableCompat;
+import org.haruyq.createmediasystems.api.client.Shaders;
+import org.haruyq.createmediasystems.api.sublevel.SubLevels;
 import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
-import org.haruyq.createmediasystems.lighting.AnalysisFrame;
+import org.haruyq.createmediasystems.api.lighting.AudioLevels;
+import org.haruyq.createmediasystems.api.lighting.GroupView;
 import org.haruyq.createmediasystems.lighting.LightingIllumination;
+import org.haruyq.createmediasystems.api.client.WorldChanges;
 import org.haruyq.createmediasystems.lighting.LightingRaycast;
 import org.haruyq.createmediasystems.lighting.LightingRenderer;
 import org.haruyq.createmediasystems.lighting.LightingSettings;
@@ -152,7 +154,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         boxes(frame, mount, normals(mount, normals), stadium ? STADIUM_MOUNT : FLOODLIGHT_MOUNT, light);
         boxes(frame, head, normals(head, normals), stadium ? STADIUM_FRAME : FLOODLIGHT_FRAME, light);
         boxes(buffers.getBuffer(CASING), head, normals, stadium ? STADIUM_CASING : FLOODLIGHT_CASING, light);
-        if (IrisCompat.shadowPass()) {
+        if (Shaders.shadowPass()) {
             return;
         }
 
@@ -229,7 +231,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
                 Player target = group.target == null ? null : lamp.getLevel().getPlayerByUUID(group.target);
                 if (target != null) {
                     Vec3 body = target.getPosition(partialTick).add(0, target.getBbHeight() * 0.5, 0);
-                    Vec3 toward = SableCompat.toRenderBlockSpace(lamp.getLevel(), lamp.getBlockPos(), body)
+                    Vec3 toward = SubLevels.toRenderBlockSpace(lamp.getLevel(), lamp.getBlockPos(), body)
                             .subtract(Vec3.atCenterOf(lamp.getBlockPos()));
                     if (toward.lengthSqr() > 0.25) {
                         float[] at = ceiling ? Aim.relativeToward(toward, lamp.yaw, lamp.pitch, group.pan)
@@ -263,18 +265,18 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         return kind.intensity * (real && lightLimit > 0 ? REAL_LIGHT_OVERLAY : 1);
     }
 
-    static float audioStrength(float strength, LightingSettings.Group group, AnalysisFrame audio) {
-        if (!group.audio || audio == null) return strength;
-        float energy = switch (group.audioBand) {
+    static float audioStrength(float strength, GroupView group, AudioLevels audio) {
+        if (!group.audio() || audio == null) return strength;
+        float energy = switch (group.audioBand()) {
             case BASS -> audio.bass();
             case MID -> audio.mid();
             case HIGH -> audio.high();
-            case ALL -> audio.level();
+            default -> audio.level();
         };
         return strength * Mth.clamp(0.12f + energy * 1.5f + audio.pulse() * 0.35f, 0, 1);
     }
 
-    static int color(LightingSettings.Group group, int order, int count, double seconds, AnalysisFrame shown, int individual) {
+    static int color(LightingSettings.Group group, int order, int count, double seconds, AudioLevels shown, int individual) {
         boolean video = shown != null;
         return group.mapping == LightingSettings.Mapping.PER_FIXTURE && !group.videoColors(video)
                 ? group.colors[Math.floorMod(individual, group.colorCount)]
@@ -305,10 +307,10 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
 
         LightingRaycast update(FloodlightBlock.Entity lamp, Vec3 origin, Vec3 direction, Vec3 right,
                     Vec3 up, double tangent, float range) {
-            long frame = LightingIllumination.frame();
+            long frame = WorldChanges.frame();
             Level level = lamp.getLevel();
             Vec3 anchor = Vec3.atLowerCornerOf(lamp.getBlockPos());
-            Vec3 from = SableCompat.toRenderWorld(level, lamp.getBlockPos(), origin.add(anchor));
+            Vec3 from = SubLevels.toRenderWorld(level, lamp.getBlockPos(), origin.add(anchor));
             // Off the world (a Ponder scene), every frame; in it, again when a block changes or the light moves.
             boolean still = center != null && frame - traced <= 1 && level == Minecraft.getInstance().level
                     && bounds != null && blocks == LightModelSnapshots.watch(this, bounds)
@@ -321,7 +323,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
             lastTangent = tangent;
             lastRange = range;
             LightingRaycast rays = LightingRaycast.rendered(level, lamp.getBlockPos());
-            center = rays.clip(from, SableCompat.toRenderWorld(level, lamp.getBlockPos(),
+            center = rays.clip(from, SubLevels.toRenderWorld(level, lamp.getBlockPos(),
                     origin.add(direction.scale(range)).add(anchor)));
             bounds = new AABB(from, center.point());
             for (int i = 0; i < EDGES; i++) {
@@ -329,11 +331,11 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
                 edges[i * 3] = aim.x;
                 edges[i * 3 + 1] = aim.y;
                 edges[i * 3 + 2] = aim.z;
-                LightingRaycast.Hit hit = rays.clip(from, SableCompat.toRenderWorld(level, lamp.getBlockPos(),
+                LightingRaycast.Hit hit = rays.clip(from, SubLevels.toRenderWorld(level, lamp.getBlockPos(),
                         origin.add(aim.scale(range)).add(anchor)));
                 bounds = bounds.minmax(new AABB(from, hit.point()));
                 lengths[i] = hit.block().getType() == HitResult.Type.BLOCK
-                        ? SableCompat.toRenderBlockSpace(level, lamp.getBlockPos(), hit.point()).subtract(anchor)
+                        ? SubLevels.toRenderBlockSpace(level, lamp.getBlockPos(), hit.point()).subtract(anchor)
                         .distanceTo(origin) : range;
             }
             bounds = bounds.inflate(2);
@@ -470,6 +472,6 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
     public AABB getRenderBoundingBox(FloodlightBlock.Entity lamp) {
         AABB bounds = new AABB(lamp.getBlockPos()).inflate(LightingSettings.MAX_RANGE + 1);
         Level level = lamp.getLevel();
-        return level == null ? bounds : SableCompat.toWorld(level, bounds);
+        return level == null ? bounds : SubLevels.toWorld(level, bounds);
     }
 }

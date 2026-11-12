@@ -1,7 +1,7 @@
 package io.github.jinsh1228.largelights;
 
 import org.haruyq.createmediasystems.Reach;
-import org.haruyq.createmediasystems.SableCompat;
+import org.haruyq.createmediasystems.api.sublevel.SubLevels;
 import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
 import org.haruyq.createmediasystems.lighting.LightingSettings;
 
@@ -55,7 +55,7 @@ public record ConsolePacket(BlockPos console, int group, Action action, int inde
         LightingConsoleBlock.Entity part = Reach.blockEntity(player, packet.console, Reach.HAND,
                 LightingConsoleBlock.Entity.class);
         LightingConsoleBlock.Entity console = part == null ? null : part.controller();
-        if (console == null || !SableCompat.mayInteract(player.level(), player, console.getBlockPos())) {
+        if (console == null || !SubLevels.mayInteract(player.level(), player, console.getBlockPos())) {
             return;
         }
         apply(console, packet);

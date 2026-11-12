@@ -2,10 +2,11 @@ package io.github.jinsh1228.largelights.client;
 
 import java.util.function.Consumer;
 
-import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
-import org.haruyq.createmediasystems.lighting.LightingConsolePage;
-import org.haruyq.createmediasystems.lighting.LightingConsoleSurface;
-import org.haruyq.createmediasystems.lighting.LightingPackets;
+import org.haruyq.createmediasystems.api.lighting.ConsoleView;
+import org.haruyq.createmediasystems.api.lighting.GroupView;
+import org.haruyq.createmediasystems.api.lighting.ConsoleSetting;
+import org.haruyq.createmediasystems.api.lighting.client.ConsolePage;
+import org.haruyq.createmediasystems.api.lighting.client.ConsoleSurface;
 import org.haruyq.createmediasystems.lighting.LightingRenderer;
 import org.joml.Matrix4f;
 
@@ -34,7 +35,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * faders, with the master; colour temperatures and fine RGB; and the beam: aim, reach, width up to 80°, and how the
  * group lights the world (real light on or off, its brightest light level).
  */
-public final class FloodlightPage implements LightingConsolePage {
+public final class FloodlightPage implements ConsolePage {
     private static final int[] TEMPERATURES = {2700, 3000, 4000, 5000, 5700, 6500};
     /** Each temperature's white, as near as a monitor shows it. */
     private static final int[] TEMPERATURE_COLORS = {0xFFA957, 0xFFB46B, 0xFFD1A3, 0xFFE4CE, 0xFFEEE3, 0xFFF9FD};
@@ -44,20 +45,20 @@ public final class FloodlightPage implements LightingConsolePage {
     private static final float ROW = 0.74f / 6;
     /** The console whose next scene key saves instead of recalls. */
     @Nullable
-    private static LightingConsoleBlock.Entity saving;
+    private static ConsoleView saving;
 
     public static void register() {
-        LightingConsolePage.register(CreateLargeLights.MOD_ID, new FloodlightPage());
+        ConsolePage.register(CreateLargeLights.MOD_ID, new FloodlightPage());
     }
 
     /** The selected group's loaded floodlights. */
-    private static int fixtures(LightingConsoleBlock.Entity console) {
+    private static int fixtures(ConsoleView console) {
         int count = 0;
         var level = console.getLevel();
         if (level != null) {
             for (BlockPos pos : console.fixtures()) {
                 if (level.isLoaded(pos) && level.getBlockEntity(pos) instanceof FloodlightBlock.Entity light
-                        && light.group() == console.settings.selectedGroup) {
+                        && light.group() == console.selectedGroup()) {
                     count++;
                 }
             }
@@ -73,17 +74,17 @@ public final class FloodlightPage implements LightingConsolePage {
         return text(key, args).getString();
     }
 
-    private static int group(LightingConsoleBlock.Entity console) {
-        return console.settings.selectedGroup;
+    private static int group(ConsoleView console) {
+        return console.selectedGroup();
     }
 
-    private static LightingSettings.Group selected(LightingConsoleBlock.Entity console) {
-        return console.settings.groups[group(console)];
+    private static GroupView selected(ConsoleView console) {
+        return console.groupSettings(group(console));
     }
 
-    private static int color(LightingConsoleBlock.Entity console) {
-        LightingSettings.Group group = selected(console);
-        return group.colors[Math.min(console.settings.selectedColor, group.colors.length - 1)];
+    private static int color(ConsoleView console) {
+        GroupView group = selected(console);
+        return group.color(Math.min(console.selectedColor(), LightingSettings.COLORS - 1));
     }
 
     // Where things are: deck areas (x, z) and monitor rows (x, y).
@@ -146,10 +147,10 @@ public final class FloodlightPage implements LightingConsolePage {
     private static final int MOTION_ROW = 4;
     private static final int TARGET_ROW = 5;
 
-    private static Component target(LightingConsoleBlock.Entity console) {
-        var uuid = selected(console).target;
+    private static Component target(ConsoleView console) {
+        var uuid = selected(console).target();
         var player = uuid == null || console.getLevel() == null ? null : console.getLevel().getPlayerByUUID(uuid);
-        return player == null ? LightingText.text("—", LightingText.MUTED) : player.getName().copy().withColor(LightingText.MODE);
+        return player == null ? ConsoleSurface.text("—", LightingText.MUTED) : player.getName().copy().withColor(LightingText.MODE);
     }
 
     /** The aim pad's point for pan and tilt, centred on the neutral aim (Aim.NEUTRAL_TILT). */
@@ -171,9 +172,9 @@ public final class FloodlightPage implements LightingConsolePage {
     }
 
     @Override
-    public void render(LightingConsoleBlock.Entity console, LightingConsoleSurface surface) {
-        LightingSettings settings = console.settings;
-        LightingSettings.Group group = selected(console);
+    public void render(ConsoleView console, ConsoleSurface surface) {
+        ConsoleView settings = console;
+        GroupView group = selected(console);
         int g = group(console);
         int scene = ConsoleSettings.scene(console);
         boolean saving = FloodlightPage.saving == console;
@@ -195,20 +196,20 @@ public final class FloodlightPage implements LightingConsolePage {
         float fade = ConsoleSettings.fade(console);
         surface.knob(1.54f, KNOB_Z, 0xFFC75C, fade / ConsoleSettings.MAX_FADE);
         surface.deckText(1.45f, 1.2f, plain("fade"), 0xE6F1FF, 0.2f);
-        surface.fader(1.88f, settings.master, 0xF0F4FF);
+        surface.fader(1.88f, settings.master(), 0xF0F4FF);
         surface.deckText(1.82f, 1.46f, plain("master"), 0xE6F1FF, 0.12f);
-        surface.monitorText(1.08f, rowTop(0) - 0.015f, text("scene_now", scene < 0 ? LightingText.text("—", LightingText.MUTED)
+        surface.monitorText(1.08f, rowTop(0) - 0.015f, text("scene_now", scene < 0 ? ConsoleSurface.text("—", LightingText.MUTED)
                 : text("scene." + scene).withColor(LightingText.MODE)), 0.84f);
         surface.monitorText(1.08f, rowTop(1) - 0.015f, text("fade_now",
-                LightingText.number(String.format(java.util.Locale.ROOT, "%.1f", fade))), 0.84f);
+                ConsoleSurface.number(String.format(java.util.Locale.ROOT, "%.1f", fade))), 0.84f);
         surface.monitorText(1.08f, rowTop(2) - 0.015f, text("master_now",
-                LightingText.number(Math.round(settings.master * 100) + "%")), 0.84f);
+                ConsoleSurface.number(Math.round(settings.master() * 100) + "%")), 0.84f);
         surface.monitorText(1.08f, rowTop(4) - 0.015f, text(saving ? "save_help" : "scene_help")
                 .withColor(saving ? LightingText.WARNING : LightingText.MUTED), 0.84f);
 
         // Colour: the middle.
         int current = color(console);
-        surface.deckText(2.08f, 0.12f, plain("color"), LightingText.readable(current), 0.84f);
+        surface.deckText(2.08f, 0.12f, plain("color"), ConsoleSurface.readable(current), 0.84f);
         int nearest = nearestTemperature(current);
         for (int i = 0; i < TEMPERATURES.length; i++) {
             Area key = temperatureKey(i);
@@ -224,23 +225,23 @@ public final class FloodlightPage implements LightingConsolePage {
             surface.deckText(knob.left() + 0.07f, 1.2f, new String[]{"R", "G", "B"}[i], ACCENTS[i], 0.06f);
         }
         surface.monitor(2.08f, 2.22f, rowTop(0) - 0.1f, rowTop(0) - 0.02f, current);
-        surface.monitorText(2.26f, rowTop(0) - 0.015f, LightingText.text(String.format("#%06X ", current),
-                LightingText.readable(current)).append(TEMPERATURE_COLORS[nearest] == current
-                ? LightingText.number(TEMPERATURES[nearest] + "K") : text("custom").withColor(LightingText.MODE)), 0.66f);
+        surface.monitorText(2.26f, rowTop(0) - 0.015f, ConsoleSurface.text(String.format("#%06X ", current),
+                ConsoleSurface.readable(current)).append(TEMPERATURE_COLORS[nearest] == current
+                ? ConsoleSurface.number(TEMPERATURES[nearest] + "K") : text("custom").withColor(LightingText.MODE)), 0.66f);
 
         // Timers: the middle monitor's lower rows. On or off, then each timer's on, time and scene.
         ConsoleSettings.View view = ConsoleSettings.view(console);
         long day = console.getLevel() == null ? 0 : console.getLevel().getDayTime();
         surface.monitor(2.065f, 2.935f, rowTop(TIMERS_ROW) - 0.117f, rowTop(TIMERS_ROW),
                 view.timersOn() ? 0x1F4A33 : 0x2A2F3A);
-        surface.monitorText(2.08f, rowTop(TIMERS_ROW) - 0.015f, text("timers_now", LightingText.on(view.timersOn()),
-                LightingText.number(clock(day))), 0.84f);
+        surface.monitorText(2.08f, rowTop(TIMERS_ROW) - 0.015f, text("timers_now", ConsoleSurface.on(view.timersOn()),
+                ConsoleSurface.number(clock(day))), 0.84f);
         for (int i = 0; i < ConsoleSettings.TIMERS; i++) {
             ConsoleSettings.Timer timer = view.timers()[i];
             float top = rowTop(TIMERS_ROW + 1 + i) - 0.015f;
             int muted = view.timersOn() && timer.on() ? LightingText.TEXT : LightingText.MUTED;
-            surface.monitorText(TIMER_ON.left() + 0.015f, top, LightingText.on(timer.on()), 0.2f);
-            surface.monitorText(TIMER_TIME.left() + 0.015f, top, LightingText.text(clock(timer.time()), muted), 0.28f);
+            surface.monitorText(TIMER_ON.left() + 0.015f, top, ConsoleSurface.on(timer.on()), 0.2f);
+            surface.monitorText(TIMER_TIME.left() + 0.015f, top, ConsoleSurface.text(clock(timer.time()), muted), 0.28f);
             surface.monitorText(TIMER_SCENE.left() + 0.015f, top, text("scene." + timer.scene()).withColor(
                     muted == LightingText.TEXT ? LightingText.MODE : LightingText.MUTED), 0.28f);
         }
@@ -251,8 +252,8 @@ public final class FloodlightPage implements LightingConsolePage {
         surface.panelBorder(AIM.left(), AIM.bottom(), AIM.right(), AIM.top(), 0.012f, 0x63DAEE);
         // The neutral aim: where each floodlight was aimed by hand.
         surface.panel(3.49f, 0.615f, 3.51f, 0.635f, 0x3A6B7A);
-        float x = aimX(group.pan);
-        float z = aimZ(group.tilt);
+        float x = aimX(group.pan());
+        float z = aimZ(group.tilt());
         surface.panel(x - 0.07f, z - 0.009f, x + 0.07f, z + 0.009f, 0x7DEBFF);
         surface.panel(x - 0.009f, z - 0.07f, x + 0.009f, z + 0.07f, 0x7DEBFF);
         float spread = ConsoleSettings.spread(console, g);
@@ -260,7 +261,7 @@ public final class FloodlightPage implements LightingConsolePage {
         ring(surface, x, z, 0.035f + spread / ConsoleSettings.MAX_SPREAD * 0.13f, 0.008f, 0x7DEBFF);
         int level = ConsoleSettings.maxLevel(console, g);
         boolean real = ConsoleSettings.realLight(console, g);
-        float[] values = {(group.range - 2) / (LightingSettings.MAX_RANGE - 2), (spread - 1) / (ConsoleSettings.MAX_SPREAD - 1),
+        float[] values = {(group.range() - 2) / (LightingSettings.MAX_RANGE - 2), (spread - 1) / (ConsoleSettings.MAX_SPREAD - 1),
                 (level - 1) / 14f};
         String[] knobs = {"range", "spread", "level"};
         for (int i = 0; i < 3; i++) {
@@ -270,21 +271,21 @@ public final class FloodlightPage implements LightingConsolePage {
         }
         int fixtures = fixtures(console);
         surface.monitorText(3.08f, rowTop(0) - 0.015f, text("spread_now",
-                LightingText.number(Math.round(spread) + "°"), LightingText.number(Math.round(group.range) + " m")), 0.84f);
-        surface.monitorText(3.08f, rowTop(1) - 0.015f, text("aim_now", LightingText.number(signed(group.pan) + "°"),
-                LightingText.number(signed(group.tilt - Aim.NEUTRAL_TILT) + "°")), 0.84f);
+                ConsoleSurface.number(Math.round(spread) + "°"), ConsoleSurface.number(Math.round(group.range()) + " m")), 0.84f);
+        surface.monitorText(3.08f, rowTop(1) - 0.015f, text("aim_now", ConsoleSurface.number(signed(group.pan()) + "°"),
+                ConsoleSurface.number(signed(group.tilt() - Aim.NEUTRAL_TILT) + "°")), 0.84f);
         surface.monitor(3.065f, 3.935f, rowTop(REAL_LIGHT_ROW) - 0.117f, rowTop(REAL_LIGHT_ROW),
                 real ? 0x1F4A33 : 0x3A1F25);
-        surface.monitorText(3.08f, rowTop(REAL_LIGHT_ROW) - 0.015f, text("real_now", LightingText.on(real),
-                LightingText.number(level)), 0.84f);
-        surface.monitorText(3.08f, rowTop(3) - 0.015f, text("fixtures_now", LightingText.number(fixtures)), 0.84f);
+        surface.monitorText(3.08f, rowTop(REAL_LIGHT_ROW) - 0.015f, text("real_now", ConsoleSurface.on(real),
+                ConsoleSurface.number(level)), 0.84f);
+        surface.monitorText(3.08f, rowTop(3) - 0.015f, text("fixtures_now", ConsoleSurface.number(fixtures)), 0.84f);
         surface.monitorText(3.08f, rowTop(MOTION_ROW) - 0.015f, text("motion_now",
-                LightingText.mode(group.motion)), 0.84f);
+                ConsoleSurface.mode(group.motion().name().toLowerCase(java.util.Locale.ROOT))), 0.84f);
         surface.monitorText(3.08f, rowTop(TARGET_ROW) - 0.015f, text("target_now", target(console)), 0.84f);
     }
 
     /** A ring on the deck round ({@code x}, {@code z}), drawn with the surface's own pose and buffers. */
-    private static void ring(LightingConsoleSurface surface, float x, float z, float radius, float width, int color) {
+    private static void ring(ConsoleSurface surface, float x, float z, float radius, float width, int color) {
         Matrix4f pose = surface.pose();
         VertexConsumer out = surface.buffers().getBuffer(LightingRenderer.lensType());
         int segments = 32;
@@ -298,7 +299,7 @@ public final class FloodlightPage implements LightingConsolePage {
         }
     }
 
-    private static void ringVertex(LightingConsoleSurface surface, VertexConsumer out, Matrix4f pose, float x, float z,
+    private static void ringVertex(ConsoleSurface surface, VertexConsumer out, Matrix4f pose, float x, float z,
                                    float radius, double angle, int color) {
         float px = x + (float) Math.cos(angle) * radius;
         float pz = z + (float) Math.sin(angle) * radius;
@@ -331,7 +332,7 @@ public final class FloodlightPage implements LightingConsolePage {
 
     @Nullable
     @Override
-    public LightingConsolePage.Control hit(LightingConsoleBlock.Entity console, Vec3 point, boolean monitor) {
+    public ConsolePage.Control hit(ConsoleView console, Vec3 point, boolean monitor) {
         int g = group(console);
         if (monitor) {
             Control timer = timerHit(console, point);
@@ -341,22 +342,22 @@ public final class FloodlightPage implements LightingConsolePage {
             if (row(3, REAL_LIGHT_ROW).contains(point.x, point.y)) {
                 boolean real = ConsoleSettings.realLight(console, g);
                 return new Thing(row(3, REAL_LIGHT_ROW), true, text("real_light"),
-                        () -> LightingText.on(ConsoleSettings.realLight(console, g)))
+                        () -> ConsoleSurface.on(ConsoleSettings.realLight(console, g)))
                         .onPress(shift -> send(console, ConsolePacket.Action.REAL_LIGHT, 0, real ? 0 : 1));
             }
             if (row(3, MOTION_ROW).contains(point.x, point.y)) {
                 return new Thing(row(3, MOTION_ROW), true, text("motion"),
-                        () -> LightingText.mode(selected(console).motion))
-                        .onPress(shift -> LightingConsolePage.send(console, LightingPackets.Control.MOTION, g, 0,
-                                Math.floorMod(selected(console).motion.ordinal() + (shift ? -1 : 1), 4), 0))
-                        .onScroll((step, shift) -> LightingConsolePage.send(console, LightingPackets.Control.MOTION, g, 0,
-                                Math.floorMod(selected(console).motion.ordinal() + step, 4), 0));
+                        () -> ConsoleSurface.mode(selected(console).motion().name().toLowerCase(java.util.Locale.ROOT)))
+                        .onPress(shift -> console.set(ConsoleSetting.MOTION, g, 0,
+                                Math.floorMod(selected(console).motion().ordinal() + (shift ? -1 : 1), GroupView.Motion.values().length), 0))
+                        .onScroll((step, shift) -> console.set(ConsoleSetting.MOTION, g, 0,
+                                Math.floorMod(selected(console).motion().ordinal() + step, GroupView.Motion.values().length), 0));
             }
             if (row(3, TARGET_ROW).contains(point.x, point.y)) {
                 return new Thing(row(3, TARGET_ROW), true, text("target"), () -> target(console))
-                        .onPress(shift -> LightingConsolePage.send(console, LightingPackets.Control.TARGET, g, 0,
+                        .onPress(shift -> console.set(ConsoleSetting.TARGET, g, 0,
                                 shift ? -1 : 1, 0))
-                        .onScroll((step, shift) -> LightingConsolePage.send(console, LightingPackets.Control.TARGET, g, 0,
+                        .onScroll((step, shift) -> console.set(ConsoleSetting.TARGET, g, 0,
                                 step, 0));
             }
             return null;
@@ -367,7 +368,7 @@ public final class FloodlightPage implements LightingConsolePage {
             int index = i;
             if (sceneKey(i).contains(x, z)) {
                 return new Thing(sceneKey(i), false, text("scene." + i), () -> text(saving == console ? "save_into" : "recall",
-                        LightingText.number(String.format(java.util.Locale.ROOT, "%.1f", ConsoleSettings.fade(console)))))
+                        ConsoleSurface.number(String.format(java.util.Locale.ROOT, "%.1f", ConsoleSettings.fade(console)))))
                         .onPress(shift -> {
                             boolean save = saving == console;
                             saving = null;
@@ -380,28 +381,28 @@ public final class FloodlightPage implements LightingConsolePage {
                     .onPress(shift -> saving = saving == console ? null : console);
         }
         if (FADE.contains(x, z)) {
-            return new Thing(FADE, false, text("fade"), () -> LightingText.number(String.format(java.util.Locale.ROOT,
+            return new Thing(FADE, false, text("fade"), () -> ConsoleSurface.number(String.format(java.util.Locale.ROOT,
                     "%.1f s", ConsoleSettings.fade(console))))
                     .onScroll((step, shift) -> send(console, ConsolePacket.Action.FADE, 0,
                             ConsoleSettings.fade(console) + step * (shift ? 0.1f : 0.5f)));
         }
         if (MASTER.contains(x, z)) {
-            return new Thing(MASTER, false, text("master"), () -> LightingText.number(Math.round(console.settings.master * 100) + "%"))
-                    .onScroll((step, shift) -> LightingConsolePage.send(console, LightingPackets.Control.MASTER, g, 0,
-                            console.settings.master + step * 0.05f, 0))
-                    .onDrag(at -> LightingConsolePage.send(console, LightingPackets.Control.MASTER, g, 0,
-                            Mth.clamp(LightingConsoleSurface.faderValue(at.z), 0, 1), 0));
+            return new Thing(MASTER, false, text("master"), () -> ConsoleSurface.number(Math.round(console.master() * 100) + "%"))
+                    .onScroll((step, shift) -> console.set(ConsoleSetting.MASTER, g, 0,
+                            console.master() + step * 0.05f, 0))
+                    .onDrag(at -> console.set(ConsoleSetting.MASTER, g, 0,
+                            Mth.clamp(ConsoleSurface.faderValue(at.z), 0, 1), 0));
         }
         for (int i = 0; i < TEMPERATURES.length; i++) {
             int index = i;
             if (temperatureKey(i).contains(x, z)) {
-                return new Thing(temperatureKey(i), false, text("temperature_key"), () -> LightingText.number(TEMPERATURES[index] + "K"))
+                return new Thing(temperatureKey(i), false, text("temperature_key"), () -> ConsoleSurface.number(TEMPERATURES[index] + "K"))
                         .onPress(shift -> {
                             // One colour, still: the whole group in this white.
-                            LightingConsolePage.send(console, LightingPackets.Control.COLOR, g, 0, TEMPERATURE_COLORS[index], 0);
-                            LightingConsolePage.send(console, LightingPackets.Control.COUNT, g, 0, 1, 0);
-                            LightingConsolePage.send(console, LightingPackets.Control.CYCLE, g, 0, 0, 0);
-                            LightingConsolePage.send(console, LightingPackets.Control.VIDEO, g, 0, 0, 0);
+                            console.set(ConsoleSetting.COLOR, g, 0, TEMPERATURE_COLORS[index], 0);
+                            console.set(ConsoleSetting.COUNT, g, 0, 1, 0);
+                            console.set(ConsoleSetting.CYCLE, g, 0, 0, 0);
+                            console.set(ConsoleSetting.VIDEO, g, 0, 0, 0);
                         });
             }
         }
@@ -409,39 +410,39 @@ public final class FloodlightPage implements LightingConsolePage {
             int channel = i;
             if (rgbKnob(i).contains(x, z)) {
                 return new Thing(rgbKnob(i), false, Component.literal(new String[]{"R", "G", "B"}[i]),
-                        () -> LightingText.number(color(console) >> ((2 - channel) * 8) & 255))
-                        .onScroll((step, shift) -> LightingConsolePage.send(console, LightingPackets.Control.RGB, g,
-                                channel + console.settings.selectedColor * 3,
+                        () -> ConsoleSurface.number(color(console) >> ((2 - channel) * 8) & 255))
+                        .onScroll((step, shift) -> console.set(ConsoleSetting.RGB, g,
+                                channel + console.selectedColor() * 3,
                                 (color(console) >> ((2 - channel) * 8) & 255) + step * (shift ? 1 : 8), 0));
             }
         }
         if (AIM.contains(x, z)) {
-            LightingSettings.Group group = selected(console);
-            return new Thing(AIM, false, text("aim"), () -> text("aim_value", LightingText.number(signed(group.pan) + "°"),
-                    LightingText.number(signed(group.tilt - Aim.NEUTRAL_TILT) + "°")))
-                    .onDrag(at -> LightingConsolePage.send(console, LightingPackets.Control.AIM, g, 0,
+            GroupView group = selected(console);
+            return new Thing(AIM, false, text("aim"), () -> text("aim_value", ConsoleSurface.number(signed(group.pan()) + "°"),
+                    ConsoleSurface.number(signed(group.tilt() - Aim.NEUTRAL_TILT) + "°")))
+                    .onDrag(at -> console.set(ConsoleSetting.AIM, g, 0,
                             (float) Mth.clamp((at.x - 3.5) / 0.4 * 180, -180, 180),
                             aimTilt(at.z)))
                     // Sneak-use puts it back where each floodlight was aimed.
                     .onPress(shift -> {
                         if (shift) {
-                            LightingConsolePage.send(console, LightingPackets.Control.AIM, g, 0, 0, Aim.NEUTRAL_TILT);
+                            console.set(ConsoleSetting.AIM, g, 0, 0, Aim.NEUTRAL_TILT);
                         }
                     });
         }
         if (beamKnob(0).contains(x, z)) {
-            return new Thing(beamKnob(0), false, text("range"), () -> LightingText.number(Math.round(selected(console).range) + " m"))
-                    .onScroll((step, shift) -> LightingConsolePage.send(console, LightingPackets.Control.RANGE, g, 0,
-                            selected(console).range + step * (shift ? 10 : 1), 0));
+            return new Thing(beamKnob(0), false, text("range"), () -> ConsoleSurface.number(Math.round(selected(console).range()) + " m"))
+                    .onScroll((step, shift) -> console.set(ConsoleSetting.RANGE, g, 0,
+                            selected(console).range() + step * (shift ? 10 : 1), 0));
         }
         if (beamKnob(1).contains(x, z)) {
             return new Thing(beamKnob(1), false, text("spread"),
-                    () -> LightingText.number(Math.round(ConsoleSettings.spread(console, g)) + "°"))
+                    () -> ConsoleSurface.number(Math.round(ConsoleSettings.spread(console, g)) + "°"))
                     .onScroll((step, shift) -> send(console, ConsolePacket.Action.SPREAD, 0,
                             ConsoleSettings.spread(console, g) + step * (shift ? 5 : 1)));
         }
         if (beamKnob(2).contains(x, z)) {
-            return new Thing(beamKnob(2), false, text("level"), () -> LightingText.number(ConsoleSettings.maxLevel(console, g)))
+            return new Thing(beamKnob(2), false, text("level"), () -> ConsoleSurface.number(ConsoleSettings.maxLevel(console, g)))
                     .onScroll((step, shift) -> send(console, ConsolePacket.Action.MAX_LEVEL, 0,
                             ConsoleSettings.maxLevel(console, g) + step));
         }
@@ -450,10 +451,10 @@ public final class FloodlightPage implements LightingConsolePage {
 
     /** The timers on the middle monitor: the switch for them all, and each timer's switch, time and scene. */
     @Nullable
-    private static Control timerHit(LightingConsoleBlock.Entity console, Vec3 point) {
+    private static Control timerHit(ConsoleView console, Vec3 point) {
         if (row(2, TIMERS_ROW).contains(point.x, point.y)) {
             return new Thing(row(2, TIMERS_ROW), true, text("timers"),
-                    () -> LightingText.on(ConsoleSettings.view(console).timersOn()))
+                    () -> ConsoleSurface.on(ConsoleSettings.view(console).timersOn()))
                     .onPress(shift -> send(console, ConsolePacket.Action.TIMERS_ON, 0,
                             ConsoleSettings.view(console).timersOn() ? 0 : 1));
         }
@@ -464,13 +465,13 @@ public final class FloodlightPage implements LightingConsolePage {
             Area time = timerPart(TIMER_TIME, i);
             Area scene = timerPart(TIMER_SCENE, i);
             if (on.contains(point.x, point.y)) {
-                return new Thing(on, true, text("timer", index + 1), () -> LightingText.on(timer.get().on()))
+                return new Thing(on, true, text("timer", index + 1), () -> ConsoleSurface.on(timer.get().on()))
                         .onPress(shift -> send(console, ConsolePacket.Action.TIMER_ON, index, timer.get().on() ? 0 : 1));
             }
             if (time.contains(point.x, point.y)) {
                 // 15 minutes a step, an hour sneaking: a day's 1000 ticks an hour.
                 return new Thing(time, true, text("timer_time", index + 1),
-                        () -> LightingText.number(clock(timer.get().time())))
+                        () -> ConsoleSurface.number(clock(timer.get().time())))
                         .onScroll((step, shift) -> send(console, ConsolePacket.Action.TIMER_TIME, index,
                                 timer.get().time() + step * (shift ? 1000 : 250)));
             }
@@ -486,13 +487,13 @@ public final class FloodlightPage implements LightingConsolePage {
         return null;
     }
 
-    private static void send(LightingConsoleBlock.Entity console, ConsolePacket.Action action, int index, float value) {
+    private static void send(ConsoleView console, ConsolePacket.Action action, int index, float value) {
         ConsolePacket packet = new ConsolePacket(console.getBlockPos(), group(console), action, index, value);
         PacketDistributor.sendToServer(packet);
     }
 
     /** One thing on the page, its handlers set as it is made. */
-    private static final class Thing implements LightingConsolePage.Control {
+    private static final class Thing implements ConsolePage.Control {
         private final Area area;
         private final boolean monitor;
         private final Component label;
@@ -530,7 +531,7 @@ public final class FloodlightPage implements LightingConsolePage {
         }
 
         @Override
-        public Area area() {
+        public Area bounds() {
             return area;
         }
 

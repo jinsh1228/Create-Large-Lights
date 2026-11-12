@@ -4,7 +4,7 @@ import java.util.function.LongConsumer;
 import java.util.function.LongPredicate;
 import java.util.function.Supplier;
 
-import org.haruyq.createmediasystems.SableCompat;
+import org.haruyq.createmediasystems.api.sublevel.SubLevels;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
@@ -91,7 +91,7 @@ public final class RealLight {
 
     static boolean carried(Level level, BlockPos pos) {
         Vec3 center = Vec3.atCenterOf(pos);
-        return !SableCompat.toWorld(level, pos, center).equals(center);
+        return !SubLevels.toWorld(level, pos, center).equals(center);
     }
 
     static void tick(Level level, BlockPos pos, FloodlightBlock.Entity light) {

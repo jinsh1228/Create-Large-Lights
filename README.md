@@ -157,13 +157,21 @@ GPU機能が使えない環境、Irisのシェーダーパック使用中、光�
 
 ## ビルド
 
+CMS本体の光線・照射面・変更通知へのMixinは使わず、公開APIの`FixtureOptics`・`WorldChanges`を使います。
+制御卓ページ・設定参照・操作送信、Sable座標変換、Irisの状態取得も公開APIへ移行しています。
+Minecraft・Flywheel・CLL自身へのMixinは引き続き使用します。
+
+照明・SableのAPIはCMS側で実験段階とされているため、実行時の対応範囲は **CMS 1.4.6以上、1.5未満** です。
+照明の基底クラスや描画フォールバックなど、公開APIに対応口がない部分は、CMSが2.0まで互換性を保持する旧インターフェイスを使用します。
+移行範囲と検証結果は[CMS公開APIへの移行記録](docs/cms-public-api-2026-11-12.md)を参照してください。
+
 CMSは`gradle.properties`の`cms_revision`で指定したコミットのソースからビルドします。
 CLLのZIPにはCMSのソースは含まれないため、ビルドにはGitと、別途取得したCMSのソースが必要です。
 既定の場所は隣の`../Create-Media-Systems`です。CLLの`gradlew.bat`・`gradlew`があるフォルダーで、初回は次のように準備します。
 
 ```bash
 git clone https://github.com/haruyq/Create-Media-Systems.git ../Create-Media-Systems
-git -C ../Create-Media-Systems checkout 05b8d4f7d734b69d23aa1ef9ba4f0904b7baf367
+git -C ../Create-Media-Systems checkout a7490922ea23bbf50aa1a39e3cd29b027c8b5ae0
 ```
 
 Windows（PowerShell）:
@@ -219,7 +227,7 @@ CPU描画と本番GPU描画の比較用シーン（デモ用コードは通常�
 `gpuAngle=vertical` で真上からの照射、`gpuLights=1` で単灯を比較できます。
 全灯の位置・色・明るさ・照射角・射程の一致を検証し、実光量をOFFにして表面投影だけを測定します。
 `gpuMode=gpu` は比較用の旧GPU試作です。この試作だけは `-PshadowSize=1024` などで影の解像度を変更できます。
-`gpuMode=cms` は比較用にCLLのraycast・surface model・ModelData通知の3Mixinを除外し、CMS本来の表面描画を使います。
+`gpuMode=cms` は比較用にCLLの`FixtureOptics`登録を省き、CMS本来の光線判定と表面描画を使います。検証用MixinもCLL自身だけを対象にしています。
 異なるCMSコミットを比較する場合は、対応するcheckoutと`-Pcms_revision=<コミット>`を揃えて指定します。
 
 多数の特殊形状とCreateコピーキャットを置いた81×81×66ブロックの空間で、実光量をONにした多灯計測:

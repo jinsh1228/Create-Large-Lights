@@ -21,6 +21,6 @@ abstract class ProductionProjectionTrialMixin {
 
     @Inject(method = "queue", at = @At("HEAD"), cancellable = true)
     private static void trial(CallbackInfoReturnable<Boolean> cir) {
-        if (!GpuProjectionDemo.production()) cir.setReturnValue(false);
+        if (!GpuProjectionDemo.production()) cir.setReturnValue(GpuProjectionDemo.gpu());
     }
 }

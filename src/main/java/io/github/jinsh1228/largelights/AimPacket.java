@@ -1,6 +1,6 @@
 package io.github.jinsh1228.largelights;
 
-import org.haruyq.createmediasystems.SableCompat;
+import org.haruyq.createmediasystems.api.sublevel.SubLevels;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
@@ -44,15 +44,15 @@ public record AimPacket(BlockPos light, Vec3 target) implements CustomPacketPayl
         if (!level.isLoaded(packet.light) || !(level.getBlockEntity(packet.light) instanceof FloodlightBlock.Entity light)) {
             return;
         }
-        Vec3 center = SableCompat.toWorld(level, packet.light, Vec3.atCenterOf(packet.light));
+        Vec3 center = SubLevels.toWorld(level, packet.light, Vec3.atCenterOf(packet.light));
         if (player.distanceToSqr(center) > PLAYER_REACH * PLAYER_REACH
                 || center.distanceToSqr(packet.target) > TARGET_REACH * TARGET_REACH
-                || !SableCompat.mayInteract(level, player, packet.light)
+                || !SubLevels.mayInteract(level, player, packet.light)
                 || !Double.isFinite(packet.target.x + packet.target.y + packet.target.z)) {
             return;
         }
         // In the floodlight's own block space, so a light on a moving Sable structure aims as it sits there.
-        Vec3 toward = SableCompat.toBlockSpace(level, packet.light, packet.target).subtract(Vec3.atCenterOf(packet.light));
+        Vec3 toward = SubLevels.toBlockSpace(level, packet.light, packet.target).subtract(Vec3.atCenterOf(packet.light));
         if (toward.lengthSqr() < 0.25) {
             return;
         }
