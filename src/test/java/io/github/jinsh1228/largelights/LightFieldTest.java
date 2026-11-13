@@ -352,4 +352,68 @@ class LightFieldTest {
         assertEquals(0, field.maskCount);
         assertTrue(field.sections.isEmpty());
     }
+
+    @Test
+    void editingOldRayPathsWhileAimedAwayOrShortenedRefreshesThemWhenRestored() {
+        for (boolean turn : new boolean[]{false, true}) {
+            AtomicBoolean blocked = new AtomicBoolean();
+            LightField.Field field = new LightField.Field((source, beam, target) -> !blocked.get());
+            LightField.Beam original = beam(6);
+            BlockPos target = new BlockPos(0, 0, 40);
+            field.update(BlockPos.ZERO, original);
+            assertTrue(field.sample(target) > 0);
+            field.update(BlockPos.ZERO, new LightField.Beam(original.origin(), turn ? new Vec3(1, 0, 0) : original.direction(),
+                    original.tangent(), turn ? original.range() : 8, 1, 6, original.radius()));
+            blocked.set(true);
+            field.invalidate(new BlockPos(0, 0, 20));
+            assertEquals(0, field.maskCount);
+            field.update(BlockPos.ZERO, original);
+            assertEquals(0, field.sample(target), "old ray after " + (turn ? "turning" : "shortening"));
+        }
+    }
+
+    @Test
+    void chunkChangesAlsoRetireOldRaysOutsideTheCurrentRange() {
+        AtomicBoolean blocked = new AtomicBoolean();
+        LightField.Field field = new LightField.Field((source, beam, target) -> !blocked.get());
+        LightField.Beam original = beam(6);
+        BlockPos target = new BlockPos(0, 0, 40);
+        field.update(BlockPos.ZERO, original);
+        assertTrue(field.sample(target) > 0);
+        field.update(BlockPos.ZERO, new LightField.Beam(original.origin(), original.direction(), original.tangent(),
+                8, 1, 6, original.radius()));
+        blocked.set(true);
+        field.invalidateChunk(0, 1);
+        field.update(BlockPos.ZERO, original);
+        assertEquals(0, field.sample(target));
+    }
+
+    @Test
+    void removingAShortenedFixtureReleasesMasksFromItsFormerRange() {
+        LightField.Field field = new LightField.Field((source, beam, target) -> true);
+        LightField.Beam original = beam(6);
+        field.update(BlockPos.ZERO, original);
+        assertTrue(field.sample(new BlockPos(0, 0, 40)) > 0);
+        field.update(BlockPos.ZERO, new LightField.Beam(original.origin(), original.direction(), original.tangent(),
+                8, 1, 6, original.radius()));
+        assertEquals(1, field.maskCount);
+        field.update(BlockPos.ZERO, null);
+        assertEquals(0, field.maskCount);
+    }
+
+    @Test
+    void unrelatedEditsKeepRaysFromEarlierGeometryReusable() {
+        AtomicInteger traces = new AtomicInteger();
+        LightField.Field field = new LightField.Field((source, beam, target) -> { traces.incrementAndGet(); return true; });
+        LightField.Beam original = beam(6);
+        BlockPos target = new BlockPos(0, 0, 40);
+        field.update(BlockPos.ZERO, original);
+        int before = field.sample(target);
+        field.update(BlockPos.ZERO, new LightField.Beam(original.origin(), original.direction(), original.tangent(),
+                8, 1, 6, original.radius()));
+        assertTrue(field.invalidate(new BlockPos(512, 0, 20)).isEmpty());
+        field.update(BlockPos.ZERO, original);
+        assertEquals(before, field.sample(target));
+        assertEquals(1, traces.get());
+    }
 }

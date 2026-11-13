@@ -6,10 +6,37 @@ import java.util.Random;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.Shapes;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class LightTraversalTest {
+    @Test
+    void fullBlockPredicateMatchesVanillaAtFacesCornersShortRaysAndWorldEdges() {
+        Random random = new Random(51742);
+        for (int i = 0; i < 50000; i++) {
+            double offset = i % 3 == 0 ? 29990000 : i % 3 == 1 ? -29990000 : 0;
+            Vec3 from = new Vec3(offset + random.nextInt(32), random.nextInt(32), offset + random.nextInt(32));
+            if (i % 2 == 0) from = from.add(random.nextDouble(), random.nextDouble(), random.nextDouble());
+            Vec3 to = from.add(random.nextInt(129) - 64, random.nextInt(129) - 64, random.nextInt(129) - 64);
+            if (i % 7 == 0) to = from.add(0, 64, 0);
+            if (i % 11 == 0) to = from.add(64, 64, 64);
+            if (i % 13 == 0) to = from.add(1e-5, 0, 0);
+            if (i % 17 == 0) to = from;
+            BlockPos pos = BlockPos.containing(from.lerp(to, random.nextDouble()));
+            if (i % 5 == 0) pos = pos.offset(1, 0, 0);
+            assertEquals(Shapes.block().clip(from, to, pos) != null, LightTraversal.hitsFullBlock(from, to, pos), "ray " + i);
+        }
+        BlockPos pos = new BlockPos(3, 4, 5);
+        for (double edge : new double[]{-1e-7, -1e-8, 0, 1e-8, 1e-7, .5, 1 - 1e-8, 1, 1 + 1e-8, 1 + 1e-7}) {
+            for (double end : new double[]{-2, 0, .5, 1, 2}) {
+                Vec3 from = new Vec3(1, 4 + edge, 5.5), to = new Vec3(3 + end, 4 + edge, 5.5);
+                assertEquals(Shapes.block().clip(from, to, pos) != null, LightTraversal.hitsFullBlock(from, to, pos));
+                assertEquals(Shapes.block().clip(to, from, pos) != null, LightTraversal.hitsFullBlock(to, from, pos));
+            }
+        }
+    }
+
     @Test
     void voxelOrderAndEndpointBiasMatchVanillaIncludingTiesAndWorldEdges() {
         Random random = new Random(92218);

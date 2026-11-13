@@ -12,6 +12,30 @@ final class LightTraversal {
         boolean blocked(BlockPos pos);
     }
 
+    /** Shapes.block().clip != null, including vanilla's inside bias and strict face/endpoint tolerances. */
+    static boolean hitsFullBlock(Vec3 from, Vec3 to, BlockPos pos) {
+        double dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
+        if (dx * dx + dy * dy + dz * dz < 1e-7) return false;
+        double x = from.x + dx * .001 - pos.getX();
+        double y = from.y + dy * .001 - pos.getY();
+        double z = from.z + dz * .001 - pos.getZ();
+        if (x >= 0 && x < 1 && y >= 0 && y < 1 && z >= 0 && z < 1) return true;
+        return Math.abs(dx) > 1e-7 && face(from.x, from.y, from.z, dx, dy, dz,
+                pos.getX() + (dx < 0 ? 1.0 : 0), pos.getY(), pos.getZ())
+                || Math.abs(dy) > 1e-7 && face(from.y, from.z, from.x, dy, dz, dx,
+                pos.getY() + (dy < 0 ? 1.0 : 0), pos.getZ(), pos.getX())
+                || Math.abs(dz) > 1e-7 && face(from.z, from.x, from.y, dz, dx, dy,
+                pos.getZ() + (dz < 0 ? 1.0 : 0), pos.getX(), pos.getY());
+    }
+
+    private static boolean face(double from, double u, double v, double delta, double du, double dv,
+                                double plane, int minU, int minV) {
+        double at = (plane - from) / delta;
+        double hitU = u + at * du, hitV = v + at * dv;
+        return at > 0 && at < 1 && minU - 1e-7 < hitU && hitU < minU + 1.0 + 1e-7
+                && minV - 1e-7 < hitV && hitV < minV + 1.0 + 1e-7;
+    }
+
     static boolean clear(Vec3 from, Vec3 to, Test test) {
         if (from.equals(to)) return true;
         double ex = Mth.lerp(-1e-7, to.x, from.x), ey = Mth.lerp(-1e-7, to.y, from.y), ez = Mth.lerp(-1e-7, to.z, from.z);

@@ -374,13 +374,12 @@ public final class LightField {
                 fixtures.put(id, next);
                 if (!weightsOnly) index(next, true);
             }
+            boolean retireMasks = before == null || next == null || !before.beam.origin.equals(next.beam.origin);
             for (var cached : sections.long2ObjectEntrySet()) {
                 if (sectionIntersects(cached.getLongKey(), affected)) {
                     cached.getValue().dirty = true;
-                    if (before == null || next == null || !before.beam.origin.equals(next.beam.origin)) {
-                        forgetMask(cached.getValue(), id);
-                    }
                 }
+                if (retireMasks) forgetMask(cached.getValue(), id);
             }
             revision++;
             if (!weightsOnly) geometry++;
@@ -550,13 +549,43 @@ public final class LightField {
 
         synchronized List<Long> invalidate(BlockPos pos) {
             visibility.invalidate(pos);
-            return forgetBeams(chunkEntries(ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4)), pos, null);
+            List<Long> removed = forgetBeams(chunkEntries(ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4)), pos, null);
+            forgetPastRays(new AABB(pos).inflate(1), removed);
+            return removed;
         }
 
         synchronized List<Long> invalidateChunk(int x, int z) {
             visibility.invalidateChunk(x, z);
-            return forgetBeams(chunkEntries(ChunkPos.asLong(x, z)), null,
-                    new AABB(x * 16.0, -1e9, z * 16.0, x * 16.0 + 16, 1e9, z * 16.0 + 16));
+            AABB chunk = new AABB(x * 16.0, -1e9, z * 16.0, x * 16.0 + 16, 1e9, z * 16.0 + 16);
+            List<Long> removed = forgetBeams(chunkEntries(ChunkPos.asLong(x, z)), null, chunk);
+            forgetPastRays(chunk.inflate(1), removed);
+            return removed;
+        }
+
+        /** Masks also hold rays from previous directions and ranges, outside the current beam's index. */
+        private void forgetPastRays(AABB area, List<Long> removed) {
+            for (var entry : sections.long2ObjectEntrySet()) {
+                CachedSection cached = entry.getValue();
+                if (cached.visibility.isEmpty()) continue;
+                int x = SectionPos.x(entry.getLongKey()) << 4, y = SectionPos.y(entry.getLongKey()) << 4,
+                        z = SectionPos.z(entry.getLongKey()) << 4;
+                boolean dirty = false;
+                for (var it = cached.visibility.values().iterator(); it.hasNext(); ) {
+                    VisibilityMask mask = it.next();
+                    Vec3 from = mask.beam.origin;
+                    if (Math.min(from.x, x) <= area.maxX && Math.max(from.x, x + 16) >= area.minX
+                            && Math.min(from.y, y) <= area.maxY && Math.max(from.y, y + 16) >= area.minY
+                            && Math.min(from.z, z) <= area.maxZ && Math.max(from.z, z + 16) >= area.minZ) {
+                        unlink(mask);
+                        it.remove();
+                        dirty = true;
+                    }
+                }
+                if (dirty) {
+                    cached.dirty = true;
+                    removed.add(entry.getLongKey());
+                }
+            }
         }
 
         private List<Long> forgetBeams(List<Entry> candidates, BlockPos obstruction, AABB chunk) {

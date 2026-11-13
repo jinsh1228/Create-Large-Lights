@@ -13,7 +13,6 @@ import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /** Shared transmission geometry. Rays retain vanilla's traversal and exact partial-block clipping. */
@@ -126,13 +125,14 @@ final class LightOcclusion implements LightField.Visibility {
                 if (pos.equals(source) || level.isOutsideBuildHeight(pos)) return false;
                 if (group == null) {
                     var chunk = level.getChunkSource().getChunkForLighting(pos.getX() >> 4, pos.getZ() >> 4);
-                    if (chunk == null) return Shapes.block().clip(from, to, pos) != null;
+                    if (chunk == null) return LightTraversal.hitsFullBlock(from, to, pos);
                     BlockState state = chunk.getBlockState(pos);
                     if (state.getLightBlock(level, pos) < 15 && !state.useShapeForLightOcclusion()) return false;
-                    return (state.useShapeForLightOcclusion() ? state.getOcclusionShape(level, pos) : Shapes.block()).clip(from, to, pos) != null;
+                    return state.useShapeForLightOcclusion() ? state.getOcclusionShape(level, pos).clip(from, to, pos) != null
+                            : LightTraversal.hitsFullBlock(from, to, pos);
                 }
                 int cell = (pos.getY() & 15) << 8 | (pos.getZ() & 15) << 4 | pos.getX() & 15;
-                if ((group.full[cell >> 6] & 1L << cell) != 0) return Shapes.block().clip(from, to, pos) != null;
+                if ((group.full[cell >> 6] & 1L << cell) != 0) return LightTraversal.hitsFullBlock(from, to, pos);
                 return (group.shaped[cell >> 6] & 1L << cell) != 0 && shape(level, group, pos, cell).clip(from, to, pos) != null;
             }
         });
