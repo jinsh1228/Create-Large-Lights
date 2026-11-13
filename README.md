@@ -161,9 +161,9 @@ CMS本体の光線・照射面・変更通知へのMixinは使わず、公開API
 制御卓ページ・設定参照・操作送信、Sable座標変換、Irisの状態取得も公開APIへ移行しています。
 Minecraft・Flywheel・CLL自身へのMixinは引き続き使用します。
 
-照明・SableのAPIはCMS側で実験段階とされているため、実行時の対応範囲は **CMS 1.4.6以上、1.5未満** です。
+照明・SableのAPIはCMS側で実験段階とされているため、実行時の対応範囲は **CMS 1.5.0以上、1.6未満** です。
 照明の基底クラスや描画フォールバックなど、公開APIに対応口がない部分は、CMSが2.0まで互換性を保持する旧インターフェイスを使用します。
-移行範囲と検証結果は[CMS公開APIへの移行記録](docs/cms-public-api-2026-11-12.md)を参照してください。
+移行範囲は[CMS公開APIへの移行記録](docs/cms-public-api-2026-11-12.md)、現在の対応内容と検証結果は[CMS 1.5.0対応記録](docs/cms-1.5.0-2026-11-13.md)を参照してください。
 
 CMSは`gradle.properties`の`cms_revision`で指定したコミットのソースからビルドします。
 CLLのZIPにはCMSのソースは含まれないため、ビルドにはGitと、別途取得したCMSのソースが必要です。
@@ -171,7 +171,7 @@ CLLのZIPにはCMSのソースは含まれないため、ビルドにはGitと�
 
 ```bash
 git clone https://github.com/haruyq/Create-Media-Systems.git ../Create-Media-Systems
-git -C ../Create-Media-Systems checkout a7490922ea23bbf50aa1a39e3cd29b027c8b5ae0
+git -C ../Create-Media-Systems checkout 4968723dba5030b7a6f6213def65f55c5f2cb059
 ```
 
 Windows（PowerShell）:
