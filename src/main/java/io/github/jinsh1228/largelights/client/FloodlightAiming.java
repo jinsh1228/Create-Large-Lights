@@ -16,7 +16,7 @@ import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Aiming a floodlight from afar: sneak-use it with an empty hand, then use wherever it should light (up to 256
+ * Aiming a floodlight from afar: sneak-use it with a wrench or an empty hand, then use wherever it should light (up to 256
  * blocks off, or the sky). Using the floodlight itself again stops.
  */
 public final class FloodlightAiming {

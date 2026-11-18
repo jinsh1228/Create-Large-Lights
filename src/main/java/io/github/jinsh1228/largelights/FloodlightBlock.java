@@ -45,8 +45,8 @@ import net.minecraft.world.phys.shapes.VoxelShape;
  * A floodlight, mounted on the face it was placed against ({@link #FACING} points away from it). It works one of two
  * ways (Entity.beam). Unlinked, redstone runs it: lit as brightly as the signal, its beam width set with a wrench.
  * Linked to a lighting console, the console runs all of it: its group's brightness (with the master), beam width
- * (spread), reach (range) and colour, redstone and the wrench then doing nothing. Either way, where it points is
- * its own (sneak-use with an empty hand, FloodlightAiming), and it lights the world where its beam falls (RealLight).
+ * (spread), reach (range) and colour. In both modes, sneak-use with a wrench or an empty hand sets its base aim,
+ * and it lights the world where its beam falls (RealLight).
  */
 public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IWrenchable {
     public static final IntegerProperty POWER = BlockStateProperties.POWER;
@@ -109,8 +109,19 @@ public class FloodlightBlock extends DirectionalBlock implements EntityBlock, IW
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
                                                BlockHitResult hit) {
         // Called with an item in hand too, before the item's own use: the lighting link and wrench need theirs.
-        if (!player.isShiftKeyDown() || !player.getMainHandItem().isEmpty()
-                || !(level.getBlockEntity(pos) instanceof Entity)) {
+        if (!player.isShiftKeyDown() || !player.getMainHandItem().isEmpty()) {
+            return InteractionResult.PASS;
+        }
+        return startAiming(level, pos);
+    }
+
+    @Override
+    public InteractionResult onSneakWrenched(BlockState state, UseOnContext context) {
+        return startAiming(context.getLevel(), context.getClickedPos());
+    }
+
+    private static InteractionResult startAiming(Level level, BlockPos pos) {
+        if (!(level.getBlockEntity(pos) instanceof Entity)) {
             return InteractionResult.PASS;
         }
         // Aimed by where the player next points (FloodlightAiming), sent back as an AimPacket.

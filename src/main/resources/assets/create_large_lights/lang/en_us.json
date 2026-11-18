@@ -23,6 +23,8 @@
   "create_large_lights.console.master": "Master",
   "create_large_lights.console.scene_now": "Scene: %s",
   "create_large_lights.console.fade_now": "Fade: %s s",
+  "create_large_lights.console.output": "Lighting output",
+  "create_large_lights.console.output_state": "Lighting output: %s",
   "create_large_lights.console.master_now": "Master: %s",
   "create_large_lights.console.scene_help": "Press a scene to fade to it",
   "create_large_lights.console.save_help": "Press the scene to save into",

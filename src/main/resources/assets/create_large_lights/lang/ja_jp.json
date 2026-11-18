@@ -23,6 +23,8 @@
   "create_large_lights.console.master": "マスター",
   "create_large_lights.console.scene_now": "シーン: %s",
   "create_large_lights.console.fade_now": "フェード: %s 秒",
+  "create_large_lights.console.output": "照明出力",
+  "create_large_lights.console.output_state": "照明出力: %s",
   "create_large_lights.console.master_now": "マスター: %s",
   "create_large_lights.console.scene_help": "シーンを押すとフェードで切り替え",
   "create_large_lights.console.save_help": "保存するシーンを押してください",
@@ -58,5 +60,17 @@
   "create_large_lights.console.timers": "タイマー（全体）",
   "create_large_lights.console.timer": "タイマー %s",
   "create_large_lights.console.timer_time": "タイマー %s の時刻（スクロールで15分、スニークで1時間）",
-  "create_large_lights.console.timer_scene": "タイマー %s のシーン"
+  "create_large_lights.console.timer_scene": "タイマー %s のシーン",
+  "create_large_lights.ponder.floodlights.header": "投光器の向き合わせと接続",
+  "create_large_lights.ponder.floodlights.text_1": "未接続の投光器はレッドストーンで点灯します。大型投光器はさらに遠くまで照らせます。",
+  "create_large_lights.ponder.floodlights.text_2": "Createのレンチで右クリックすると照射角が切り替わります。",
+  "create_large_lights.ponder.floodlights.text_3": "レンチを持ってスニークしながら右クリックすると、向き合わせを始めます。",
+  "create_large_lights.ponder.floodlights.text_4": "照らしたい場所を右クリックして向きを決めます。投光器をもう一度右クリックすると中止します。",
+  "create_large_lights.ponder.floodlights.text_5": "LED調整用スパナで、組み立て済みの照明制御卓を右クリックして選びます。",
+  "create_large_lights.ponder.floodlights.text_6": "続けて投光器を右クリックすると、選択中のグループに接続します。",
+  "create_large_lights.ponder.floodlights.text_7": "投光器ページで「照明出力」をオンにし、マスターとグループのフェーダーを上げます。",
+  "create_large_lights.ponder.street_lights.header": "街灯と照度計",
+  "create_large_lights.ponder.street_lights.text_1": "街灯用ポールを積み、その上に街灯を置きます。周囲が暗くなると自動で点灯します。",
+  "create_large_lights.ponder.street_lights.text_2": "レンチで右クリックすると、自動点灯とレッドストーン制御を切り替えます。",
+  "create_large_lights.ponder.street_lights.text_3": "照度計を手に持つと明るさを確認でき、周囲の暗い場所を見つけられます。"
 }

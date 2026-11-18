@@ -152,6 +152,7 @@ public final class FloodlightPage implements ConsolePage {
         return String.format(java.util.Locale.ROOT, "%d:%02d", (time / 1000 + 6) % 24, time % 1000 * 60 / 1000);
     }
 
+    private static final int OUTPUT_ROW = 3;
     /** The real light row, on the right monitor: pressed, it switches the group's real light. */
     private static final int REAL_LIGHT_ROW = 2;
     /** The group's motion and its target, as the console's own page sets them (it doesn't show for this group). */
@@ -215,6 +216,10 @@ public final class FloodlightPage implements ConsolePage {
                 ConsoleSurface.number(String.format(java.util.Locale.ROOT, "%.1f", fade))), 0.84f);
         surface.monitorText(1.08f, rowTop(2) - 0.015f, text("master_now",
                 ConsoleSurface.number(Math.round(settings.master() * 100) + "%")), 0.84f);
+        Area output = row(1, OUTPUT_ROW);
+        boolean enabled = console.enabled();
+        surface.monitor(output.left(), output.right(), output.bottom(), output.top(), enabled ? 0x1F4A33 : 0x3A1F25);
+        surface.monitorText(1.08f, output.top() - 0.015f, text("output_state", ConsoleSurface.on(enabled)), 0.84f);
         surface.monitorText(1.08f, rowTop(4) - 0.015f, text(saving ? "save_help" : "scene_help")
                 .withColor(saving ? LightingText.WARNING : LightingText.MUTED), 0.84f);
 
@@ -346,6 +351,10 @@ public final class FloodlightPage implements ConsolePage {
     public ConsolePage.Control hit(ConsoleView console, Vec3 point, boolean monitor) {
         int g = group(console);
         if (monitor) {
+            if (row(1, OUTPUT_ROW).contains(point.x, point.y)) {
+                return new Thing(row(1, OUTPUT_ROW), true, text("output"), () -> ConsoleSurface.on(console.enabled()))
+                        .onPress(shift -> console.set(ConsoleSetting.ENABLED, g, 0, console.enabled() ? 0 : 1, 0));
+            }
             Control timer = timerHit(console, point);
             if (timer != null) {
                 return timer;

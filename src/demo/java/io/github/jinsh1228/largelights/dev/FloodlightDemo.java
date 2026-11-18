@@ -9,6 +9,10 @@ import java.util.List;
 import java.util.stream.Stream;
 
 import com.mojang.logging.LogUtils;
+import com.simibubi.create.AllItems;
+import net.createmod.ponder.foundation.ui.PonderUI;
+import org.haruyq.createmediasystems.lighting.LightingFeature;
+import org.haruyq.createmediasystems.lighting.LinkAction;
 
 import io.github.jinsh1228.largelights.Aim;
 import io.github.jinsh1228.largelights.CreateLargeLights;
@@ -24,6 +28,9 @@ import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Difficulty;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
@@ -33,12 +40,15 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.WorldOptions;
 import net.minecraft.world.level.levelgen.presets.WorldPresets;
+import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
+import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.client.event.ScreenEvent;
+import net.neoforged.neoforge.common.NeoForge;
 
 /**
  * Dev only (-Pdemo): a gym 28 blocks tall, far past the 15 blocks a vanilla light reaches, lit by ceiling floodlights
@@ -123,7 +133,15 @@ public final class FloodlightDemo {
             server.execute(() -> console(server.overworld()));
         } else if (ticks == 1180) {
             server.execute(() -> link(server.overworld()));
+        } else if (ticks == 1220) {
+            var desk = org.haruyq.createmediasystems.lighting.LightingConsoleBlock.find(mc.level, CONSOLE);
+            var page = org.haruyq.createmediasystems.lighting.LightingConsolePage.showing(desk);
+            var control = page == null ? null : page.hit(desk, new Vec3(1.5, 1.43, 0), true);
+            check(control != null && !desk.enabled(), "a disabled desk exposes its output switch on the floodlight page");
+            if (control != null) control.press(false);
         } else if (ticks == 1300) {
+            check(mc.level.getBlockEntity(CENTER_LIGHT) instanceof FloodlightBlock.Entity light && light.beam().strength() > 0,
+                    "using the output switch lights the linked fixture on the client");
             server.execute(() -> checkLinked(server));
         } else if (ticks == 1500) {
             shot(mc, "4_console_linked.png");
@@ -182,9 +200,47 @@ public final class FloodlightDemo {
             server.execute(() -> check(io.github.jinsh1228.largelights.ConsoleSettings.scene(consoleAt(server.overworld())) == 0,
                     "setting the time back recalls nothing"));
         } else if (ticks == 2300) {
+            server.execute(() -> {
+                var player = server.getPlayerList().getPlayers().getFirst();
+                player.setItemInHand(InteractionHand.MAIN_HAND, AllItems.WRENCH.asStack());
+                view(server, CENTER_LIGHT.getCenter().add(0, -2, 0), new Vec3(15.5, FLOOR + 1, 0.5));
+            });
+        } else if (ticks == 2320) {
+            wrenchAim(mc);
+        } else if (ticks == 2340) {
+            server.execute(() -> {
+                var light = fixture(server.overworld(), CENTER_LIGHT);
+                check(light != null && light.console() != null && light.pitch < 80,
+                        "wrench target changes the linked fixture's saved aim and keeps it installed");
+            });
+            openPonder(mc, "floodlight", "floodlights");
+        } else if (ticks == 2400) {
+            openPonder(mc, "light_meter", "street_lights");
+        } else if (ticks == 2460) {
             LogUtils.getLogger().info("Floodlight demo done: {} checks failed", failures);
             mc.stop();
         }
+    }
+
+    private static void wrenchAim(Minecraft mc) {
+        var player = mc.player;
+        player.input.shiftKeyDown = true;
+        var context = new UseOnContext(player, InteractionHand.MAIN_HAND,
+                new BlockHitResult(CENTER_LIGHT.getCenter(), Direction.DOWN, CENTER_LIGHT, false));
+        check(AllItems.WRENCH.get().useOn(context).consumesAction(), "sneak-wrench starts the aiming interaction");
+        player.input.shiftKeyDown = false;
+        var click = NeoForge.EVENT_BUS.post(new InputEvent.InteractionKeyMappingTriggered(
+                1, mc.options.keyUse, InteractionHand.MAIN_HAND));
+        check(click.isCanceled(), "the next use with the wrench targets the aim instead of editing beam width");
+    }
+
+    private static void openPonder(Minecraft mc, String item, String scene) {
+        var ponder = PonderUI.of(CreateLargeLights.id(item));
+        mc.setScreen(ponder);
+        var active = ponder.getActiveScene();
+        check(active.getId().equals(CreateLargeLights.id(scene)) && active.getKeyframeCount() > 0,
+                "the {} item opens its animated Ponder scene", item);
+        ponder.seekToTime(active.getTotalTime() - 20);
     }
 
     private static int failures;
@@ -287,7 +343,15 @@ public final class FloodlightDemo {
         // The unlinked floodlights go dark: the linked one shines on in the console's red, its light blocks its own.
         power(level, false);
         FloodlightBlock.Entity center = fixture(level, CENTER_LIGHT);
-        check(console.bind(center, 0), "the centre floodlight linked to the console's group 1");
+        var player = level.getServer().getPlayerList().getPlayers().getFirst();
+        view(level.getServer(), CONSOLE.getCenter().add(0, 1, -2), CONSOLE.getCenter());
+        player.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(LightingFeature.LIGHTING_LINK.get()));
+        LinkAction.resolve(player, CONSOLE).perform(player);
+        LinkAction.resolve(player, CENTER_LIGHT).perform(player);
+        player.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+        check(center.controller() == console && center.beam().strength() > 0,
+                "the LED Tuning Wrench links and lights a fixture with a freshly formed console");
+        console.settings.enabled = false;
         var group = console.settings.groups[0];
         console.settings.master = 1;
         group.brightness = 0.4f;

@@ -2,6 +2,7 @@ package io.github.jinsh1228.largelights.client;
 
 import io.github.jinsh1228.largelights.CreateLargeLights;
 
+import net.createmod.ponder.foundation.PonderIndex;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
@@ -18,6 +19,7 @@ public class CreateLargeLightsClient {
         modBus.addListener((FMLClientSetupEvent event) -> event.enqueueWork(() -> {
             FloodlightOptics.register();
             FloodlightPage.register();
+            PonderIndex.addPlugin(new LargeLightsPonder());
         }));
         LightFieldUpdates.register();
         GpuProjectionLifecycle.register(modBus);
