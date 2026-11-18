@@ -416,4 +416,65 @@ class LightFieldTest {
         assertEquals(before, field.sample(target));
         assertEquals(1, traces.get());
     }
+
+    /** Blocked when an obstruction lies in the block box between the beam's origin and the cell. */
+    private static boolean clear(java.util.Set<BlockPos> obstructions, LightField.Beam beam, BlockPos target) {
+        Vec3 from = beam.origin(), to = target.getCenter();
+        int minX = (int) Math.floor(Math.min(from.x, to.x)), maxX = (int) Math.floor(Math.max(from.x, to.x));
+        int minY = (int) Math.floor(Math.min(from.y, to.y)), maxY = (int) Math.floor(Math.max(from.y, to.y));
+        int minZ = (int) Math.floor(Math.min(from.z, to.z)), maxZ = (int) Math.floor(Math.max(from.z, to.z));
+        for (BlockPos at : obstructions) {
+            if (at.getX() >= minX && at.getX() <= maxX && at.getY() >= minY && at.getY() <= maxY
+                    && at.getZ() >= minZ && at.getZ() <= maxZ) return false;
+        }
+        return true;
+    }
+
+    @Test
+    void cachedSamplesMatchAFreshFieldThroughRandomAimsRemovalsAndEdits() {
+        Random random = new Random(20261118);
+        java.util.Set<BlockPos> obstructions = new java.util.HashSet<>();
+        java.util.Map<BlockPos, LightField.Beam> fixtures = new java.util.HashMap<>();
+        LightField.Field cached = new LightField.Field((source, beam, target) -> clear(obstructions, beam, target));
+        Vec3[] directions = {new Vec3(0, 0, 1), new Vec3(1, 0, 0), new Vec3(0, -1, 0), new Vec3(-1, -1, 1),
+                new Vec3(1, -.5, -1), new Vec3(0, 1, 0)};
+        int lit = 0;
+        // Sampled every step, so cached levels and visibility bits are reused across changes.
+        BlockPos[] probes = new BlockPos[80];
+        for (int i = 0; i < probes.length; i++) {
+            probes[i] = new BlockPos(random.nextInt(100) - 50, random.nextInt(40) - 30, random.nextInt(100) - 50);
+        }
+        for (int step = 0; step < 600; step++) {
+            int action = random.nextInt(10);
+            if (action < 4) {
+                BlockPos source = new BlockPos(random.nextInt(9) * 5 - 20, random.nextInt(3) * 5, random.nextInt(9) * 5 - 20);
+                LightField.Beam beam = new LightField.Beam(source.getCenter(), directions[random.nextInt(directions.length)],
+                        .2 + random.nextInt(4) * .2, 8 + random.nextInt(4) * 24, .25 + random.nextInt(4) * .25,
+                        4 + random.nextInt(12), 48);
+                fixtures.put(source, beam);
+                cached.update(source, beam);
+            } else if (action < 5 && !fixtures.isEmpty()) {
+                BlockPos source = fixtures.keySet().stream().skip(random.nextInt(fixtures.size())).findFirst().orElseThrow();
+                fixtures.remove(source);
+                cached.update(source, null);
+            } else if (action < 8) {
+                // Mostly near the fixtures, sometimes far away from every ray.
+                int spread = random.nextInt(4) == 0 ? 400 : 60;
+                BlockPos edit = new BlockPos(random.nextInt(spread * 2) - spread, random.nextInt(40) - 20,
+                        random.nextInt(spread * 2) - spread);
+                if (!obstructions.remove(edit)) obstructions.add(edit);
+                cached.invalidate(edit);
+            }
+            LightField.Field fresh = new LightField.Field((source, beam, target) -> clear(obstructions, beam, target));
+            fixtures.forEach(fresh::update);
+            for (int i = 0; i < 40 + probes.length; i++) {
+                BlockPos pos = i < probes.length ? probes[i]
+                        : new BlockPos(random.nextInt(200) - 100, random.nextInt(80) - 40, random.nextInt(200) - 100);
+                int expected = fresh.sample(pos);
+                assertEquals(expected, cached.sample(pos), "step " + step + " at " + pos);
+                if (expected > 0) lit++;
+            }
+        }
+        assertTrue(lit > 1000, "the comparison must include lit cells: " + lit);
+    }
 }

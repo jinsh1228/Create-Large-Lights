@@ -158,6 +158,34 @@ var generateModMetadata = tasks.register('generateModMetadata', ProcessResources
 sourceSets.main.resources.srcDir generateModMetadata
 neoForge.ideSyncTask generateModMetadata
 
+// Packaged JSON without the whitespace between tokens; strings, including escapes, are copied unchanged.
+static String minifyJson(String text) {
+    var out = new StringBuilder(text.length())
+    boolean inString = false, escaped = false
+    for (char c : text.toCharArray()) {
+        if (inString) {
+            out.append(c)
+            if (escaped) escaped = false
+            else if (c == '\\' as char) escaped = true
+            else if (c == '"' as char) inString = false
+        } else if (c == '"' as char) {
+            inString = true
+            out.append(c)
+        } else if (!Character.isWhitespace(c)) {
+            out.append(c)
+        }
+    }
+    return out.toString()
+}
+
+tasks.named('processResources', ProcessResources).configure {
+    doLast {
+        fileTree(destinationDir).matching { include '**/*.json' }.each { file ->
+            file.setText(minifyJson(file.getText('UTF-8')), 'UTF-8')
+        }
+    }
+}
+
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.compilerArgs.add '-Xlint:deprecation'

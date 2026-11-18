@@ -3,12 +3,11 @@ package io.github.jinsh1228.largelights;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
-import java.util.WeakHashMap;
 import java.util.function.BiConsumer;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
@@ -22,7 +21,7 @@ import net.minecraft.world.phys.Vec3;
 public final class LightField {
     static final int CACHE_SECTIONS = 512;
     static final int VISIBILITY_MASKS = 8192;
-    private static final Map<Level, Field> LEVELS = new WeakHashMap<>();
+    private static final LevelMap<Field> LEVELS = new LevelMap<>();
     private static volatile BiConsumer<Level, AABB> changed = (level, bounds) -> { };
 
     private LightField() {
@@ -145,15 +144,10 @@ public final class LightField {
         changed = listener;
     }
 
+    /** Lock-free: every vanilla block light query and every block change asks this. */
     private static Field field(Level level, boolean create) {
-        synchronized (LEVELS) {
-            Field found = LEVELS.get(level);
-            if (found == null && create) {
-                found = new Field(new LightOcclusion(level));
-                LEVELS.put(level, found);
-            }
-            return found;
-        }
+        Field found = LEVELS.get(level);
+        return found != null || !create ? found : LEVELS.computeIfAbsent(level, () -> new Field(new LightOcclusion(level)));
     }
 
     /** Returns only CLL's level. Do not read vanilla light here: this is called by the vanilla light query hook. */
@@ -240,10 +234,7 @@ public final class LightField {
     }
 
     public static void clear(Level level) {
-        Field field;
-        synchronized (LEVELS) {
-            field = LEVELS.remove(level);
-        }
+        Field field = LEVELS.remove(level);
         if (field != null) {
             for (Entry entry : field.entries()) {
                 changed.accept(level, entry.bounds);
@@ -332,6 +323,10 @@ public final class LightField {
         long geometry;
         int maskCount;
         VisibilityMask oldestMask, newestMask;
+        /** Encloses every mask's rays (origin to section); a block edit outside it cannot touch a past ray. */
+        double maskMinX, maskMinY, maskMinZ, maskMaxX = -1, maskMaxY, maskMaxZ;
+        /** The chunks in the index, for lock-free rejection of queries elsewhere; null until rebuilt after a change. */
+        private volatile LongOpenHashSet lit;
 
         Field(Visibility visibility) {
             this.visibility = visibility;
@@ -387,6 +382,7 @@ public final class LightField {
         }
 
         private void index(Entry entry, boolean add) {
+            lit = null;
             AABB box = entry.bounds;
             for (int x = Mth.floor(box.minX) >> 4, endX = Mth.floor(box.maxX) >> 4; x <= endX; x++) {
                 for (int z = Mth.floor(box.minZ) >> 4, endZ = Mth.floor(box.maxZ) >> 4; z <= endZ; z++) {
@@ -437,11 +433,17 @@ public final class LightField {
         }
 
         int sample(BlockPos pos, List<Entry> entries, long version) {
+            if (entries == null) {
+                // Most queries are in chunks no beam reaches: answer those without the lock or the LRU caches.
+                LongOpenHashSet known = lit;
+                if (known != null && !known.contains(ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4))) return 0;
+            }
             long section = SectionPos.asLong(pos);
             int index = (pos.getY() & 15) << 8 | (pos.getZ() & 15) << 4 | pos.getX() & 15;
             CachedSection cached;
             synchronized (this) {
                 if (entries == null) {
+                    if (lit == null) lit = new LongOpenHashSet(chunks.keySet());
                     entries = snapshot(section).entries;
                     version = revision;
                 }
@@ -497,6 +499,7 @@ public final class LightField {
                         if (maskCount >= VISIBILITY_MASKS) forgetMask(oldestMask.owner, oldestMask.source);
                         mask = new VisibilityMask(entry.beam, cached, entry.source.asLong());
                         cached.visibility.put(entry.source.asLong(), mask);
+                        enclose(mask.beam.origin, section, maskCount == 0);
                     }
                     remember(mask);
                     if ((mask.visited[word] & bit) != 0) {
@@ -562,8 +565,26 @@ public final class LightField {
             return removed;
         }
 
+        /** Grows the bounds of all masks' rays by one mask's: from its beam's origin across its section. */
+        private void enclose(Vec3 from, long section, boolean first) {
+            int x = SectionPos.x(section) << 4, y = SectionPos.y(section) << 4, z = SectionPos.z(section) << 4;
+            double minX = Math.min(from.x, x), minY = Math.min(from.y, y), minZ = Math.min(from.z, z);
+            double maxX = Math.max(from.x, x + 16), maxY = Math.max(from.y, y + 16), maxZ = Math.max(from.z, z + 16);
+            if (first) {
+                maskMinX = minX; maskMinY = minY; maskMinZ = minZ;
+                maskMaxX = maxX; maskMaxY = maxY; maskMaxZ = maxZ;
+            } else {
+                maskMinX = Math.min(maskMinX, minX); maskMinY = Math.min(maskMinY, minY); maskMinZ = Math.min(maskMinZ, minZ);
+                maskMaxX = Math.max(maskMaxX, maxX); maskMaxY = Math.max(maskMaxY, maxY); maskMaxZ = Math.max(maskMaxZ, maxZ);
+            }
+        }
+
         /** Masks also hold rays from previous directions and ranges, outside the current beam's index. */
         private void forgetPastRays(AABB area, List<Long> removed) {
+            // Each mask's test below is within these bounds: an edit outside them (most edits) matches no mask.
+            if (maskCount == 0 || maskMinX > area.maxX || maskMaxX < area.minX || maskMinY > area.maxY
+                    || maskMaxY < area.minY || maskMinZ > area.maxZ || maskMaxZ < area.minZ) return;
+            boolean first = true;
             for (var entry : sections.long2ObjectEntrySet()) {
                 CachedSection cached = entry.getValue();
                 if (cached.visibility.isEmpty()) continue;
@@ -579,6 +600,10 @@ public final class LightField {
                         unlink(mask);
                         it.remove();
                         dirty = true;
+                    } else {
+                        // Every remaining mask is seen here, so the bounds shrink back to the masks that are left.
+                        enclose(from, entry.getLongKey(), first);
+                        first = false;
                     }
                 }
                 if (dirty) {

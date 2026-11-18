@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
@@ -36,7 +37,7 @@ public final class LightFieldNetwork {
     private static final byte[] EMPTY = new byte[0];
     private static final Map<ServerLevel, ServerState> servers = new WeakHashMap<>();
     private static final ArrayDeque<ServerLevel> scheduled = new ArrayDeque<>();
-    private static final Map<Level, ClientState> clients = new WeakHashMap<>();
+    private static final LevelMap<ClientState> clients = new LevelMap<>();
 
     private LightFieldNetwork() {
     }
@@ -97,22 +98,43 @@ public final class LightFieldNetwork {
         }
     }
 
+    /** All fields change under the {@code clients} lock; {@code view} is also read without it. */
     private static final class ClientState {
         final Long2ObjectOpenHashMap<byte[]> values = new Long2ObjectOpenHashMap<>();
         final Long2ObjectLinkedOpenHashMap<MergedLayer> merged = new Long2ObjectLinkedOpenHashMap<>();
         final LongLinkedOpenHashSet missing = new LongLinkedOpenHashSet();
         final LongOpenHashSet requested = new LongOpenHashSet();
         final LongOpenHashSet activeChunks = new LongOpenHashSet();
+        /**
+         * The active chunks and their received sections (by index from the level's lowest), as in activeChunks and
+         * values. The map is replaced, never changed, when a chunk becomes active or inactive; a received section is
+         * stored into its chunk's array.
+         */
+        volatile Long2ObjectOpenHashMap<AtomicReferenceArray<byte[]>> view = new Long2ObjectOpenHashMap<>();
+
+        void activate(long chunk, int sections) {
+            if (!activeChunks.add(chunk)) return;
+            var next = new Long2ObjectOpenHashMap<>(view);
+            next.put(chunk, new AtomicReferenceArray<>(sections));
+            view = next;
+        }
+
+        void deactivate(long chunk) {
+            if (!activeChunks.remove(chunk)) return;
+            var next = new Long2ObjectOpenHashMap<>(view);
+            next.remove(chunk);
+            view = next;
+        }
     }
 
     private record MergedLayer(DataLayer vanilla, byte[] values, DataLayer light) {
     }
 
     private static ClientState client(Level level) {
-        return clients.computeIfAbsent(level, ignored -> new ClientState());
+        return clients.computeIfAbsent(level, ClientState::new);
     }
 
-    /** Called from chunk mesh workers too; only immutable arrays leave this lock. */
+    /** Called from chunk mesh workers too; only immutable arrays are shared with them. */
     static int sample(Level level, BlockPos pos) {
         if (level.isOutsideBuildHeight(pos)) {
             return 0;
@@ -125,17 +147,28 @@ public final class LightFieldNetwork {
         return values[cell >> 1] >> ((cell & 1) << 2) & 15;
     }
 
+    /**
+     * Every block light query on the client (chunk meshes on their workers, entities, particles) reaches here, so
+     * the answer for an inactive chunk or a received section takes no lock; only a missing section's request does.
+     */
     private static byte[] values(Level level, long section) {
         if (SectionPos.y(section) < level.getMinSection() || SectionPos.y(section) >= level.getMaxSection()) return null;
+        ClientState state = clients.get(level);
+        if (state == null) return null;
+        var sections = state.view.get(chunk(section));
+        if (sections == null) {
+            return null;
+        }
+        if (level.getChunkSource().getChunkForLighting(SectionPos.x(section), SectionPos.z(section)) == null) {
+            return null;
+        }
+        byte[] values = sections.get(SectionPos.y(section) - level.getMinSection());
+        if (values != null) return values;
         synchronized (clients) {
-            ClientState state = client(level);
             if (!state.activeChunks.contains(chunk(section))) {
                 return null;
             }
-            if (level.getChunkSource().getChunkForLighting(SectionPos.x(section), SectionPos.z(section)) == null) {
-                return null;
-            }
-            byte[] values = state.values.get(section);
+            values = state.values.get(section);
             if (values == null) {
                 if (state.requested.add(section)) {
                     state.missing.add(section);
@@ -196,6 +229,7 @@ public final class LightFieldNetwork {
                 return;
             }
             state.values.put(section, values);
+            state.view.get(chunk(section)).set(SectionPos.y(section) - level.getMinSection(), values);
             state.merged.remove(section);
             state.requested.add(section);
             state.missing.remove(section);
@@ -213,7 +247,7 @@ public final class LightFieldNetwork {
     }
 
     private static void discard(ClientState state, long chunk) {
-        state.activeChunks.remove(chunk);
+        state.deactivate(chunk);
         state.values.keySet().removeIf((java.util.function.LongPredicate) id -> chunk(id) == chunk);
         state.merged.keySet().removeIf((java.util.function.LongPredicate) id -> chunk(id) == chunk);
         state.missing.removeIf((java.util.function.LongPredicate) id -> chunk(id) == chunk);
@@ -225,7 +259,7 @@ public final class LightFieldNetwork {
         synchronized (clients) {
             ClientState state = client(level);
             if (active) {
-                state.activeChunks.add(chunk);
+                state.activate(chunk, level.getSectionsCount());
             } else {
                 for (long section : state.values.keySet()) {
                     if (chunk(section) == chunk && state.values.get(section).length != 0) {
@@ -476,9 +510,9 @@ public final class LightFieldNetwork {
         if (event.getLevel() instanceof ServerLevel level) {
             servers.remove(level);
             scheduled.remove(level);
-        } else {
+        } else if (event.getLevel() instanceof Level level) {
             synchronized (clients) {
-                clients.remove(event.getLevel());
+                clients.remove(level);
             }
         }
     }

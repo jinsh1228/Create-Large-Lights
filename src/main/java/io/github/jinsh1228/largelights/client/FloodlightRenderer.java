@@ -46,6 +46,10 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
     private static final int EDGES = 16;
     private static final int STEPS = 8;
     private static final Vector3f VERTEX = new Vector3f();
+    /** Render-thread scratch for the body, used only within render before anything else draws. */
+    private static final Matrix4f MOUNT = new Matrix4f(), HEAD = new Matrix4f();
+    private static final float[] NORMALS = new float[18];
+    private static final Vector3f NORMAL = new Vector3f();
     /** The lighting console's brushed frame and riveted casing, as CMS's stage lights wear them. */
     private static final RenderType FRAME = RenderType.entityCutoutNoCull(
             CreateMediaSystems.id("textures/block/lighting_console_frame.png"));
@@ -138,7 +142,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         Matrix4f model = new Matrix4f(pose.last().pose());
         Direction facing = lamp.getBlockState().getValue(FloodlightBlock.FACING);
         // Local +Y away from what it hangs on.
-        Matrix4f mount = new Matrix4f(model).translate(0.5f, 0.5f, 0.5f).rotate(facing.getRotation());
+        Matrix4f mount = MOUNT.set(model).translate(0.5f, 0.5f, 0.5f).rotate(facing.getRotation());
         // Linked, the console's group sets all of it; unlinked, redstone sets how bright (FloodlightBlock.Entity.beam).
         FloodlightBlock.Entity.Beam beam = lamp.beam();
         LightingConsoleBlock.Entity console = beam.console();
@@ -152,10 +156,10 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         boolean sweeping = motion == Motion.SWEEP || motion == Motion.CIRCLE;
         int order = sweeping ? console.order(lamp.getBlockPos()) : 0;
         Matrix4f local = aim(lamp, beam, seconds, partialTick, motion, order);
-        Matrix4f head = new Matrix4f(model).mul(local);
+        Matrix4f head = HEAD.set(model).mul(local);
 
         float lensZ = kind.lensZ;
-        float[] normals = new float[18];
+        float[] normals = NORMALS;
         VertexConsumer frame = buffers.getBuffer(FRAME);
         boxes(frame, mount, normals(mount, normals), stadium ? STADIUM_MOUNT : FLOODLIGHT_MOUNT, light);
         boxes(frame, head, normals(head, normals), stadium ? STADIUM_FRAME : FLOODLIGHT_FRAME, light);
@@ -409,7 +413,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
 
     /** The six face normals (north, south, west, east, up, down) through {@code matrix}, into {@code out}. */
     private static float[] normals(Matrix4f matrix, float[] out) {
-        Vector3f n = new Vector3f();
+        Vector3f n = NORMAL;
         for (int axis = 0; axis < 3; axis++) {
             matrix.transformDirection(n.set(axis == 0 ? 1 : 0, axis == 1 ? 1 : 0, axis == 2 ? 1 : 0)).normalize();
             // +X east, +Y up, +Z south; each face's is that or its opposite.

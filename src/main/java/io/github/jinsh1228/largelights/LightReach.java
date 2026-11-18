@@ -39,13 +39,20 @@ public final class LightReach {
     }
 
     public double limit(BlockPos source, LightField.Beam beam) {
+        Reach reach = reach(source, beam);
+        return Math.min(beam.range(), reach.limit);
+    }
+
+    /** The cached reach for this beam, searched again only when it was searched less far than the beam's range. */
+    private Reach reach(BlockPos source, LightField.Beam beam) {
         Key key = new Key(source.immutable(), beam.origin(), beam.direction(), beam.tangent(), beam.radius());
         Reach old = cache.get(key);
-        if (old != null && (old.limit < old.searched || beam.range() <= old.searched)) return Math.min(beam.range(), old.limit);
+        if (old != null && (old.limit < old.searched || beam.range() <= old.searched)) return old;
         double limit = limit(source, beam, opaque);
         if (old == null && cache.size() >= 256) cache.remove(cache.keySet().iterator().next());
-        cache.put(key, new Reach(limit, beam.range(), beam.bounds(limit).inflate(1)));
-        return limit;
+        Reach reach = new Reach(limit, beam.range(), beam.bounds(limit).inflate(1));
+        cache.put(key, reach);
+        return reach;
     }
 
     public void invalidate(AABB area) {
@@ -59,8 +66,8 @@ public final class LightReach {
 
     /** A verified closed room limits enumeration as well as receiver and shadow work. */
     public AABB bounds(BlockPos source, LightField.Beam beam, double padding) {
-        double limit = limit(source, beam);
-        Reach reach = cache.get(new Key(source, beam.origin(), beam.direction(), beam.tangent(), beam.radius()));
+        Reach reach = reach(source, beam);
+        double limit = Math.min(beam.range(), reach.limit);
         room(source, beam, reach);
         AABB bounds = beam.bounds(limit);
         return reach.room == null ? bounds : bounds.intersect(reach.room.inflate(padding));
@@ -109,9 +116,7 @@ public final class LightReach {
 
     /** A receiver box is omitted only when its entire projected footprint lies behind opaque blocks. */
     public boolean hidden(BlockPos source, LightField.Beam beam, AABB box) {
-        limit(source, beam);
-        Key key = new Key(source, beam.origin(), beam.direction(), beam.tangent(), beam.radius());
-        Reach reach = cache.get(key);
+        Reach reach = reach(source, beam);
         room(source, beam, reach);
         if (reach.room != null) return outside(reach.room, box);
         boolean section = box.getXsize() == box.getYsize() && box.getYsize() == box.getZsize()
