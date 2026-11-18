@@ -87,6 +87,12 @@ public final class LightField {
             return intersects(box.minX, box.minY, box.minZ, box.maxX, box.maxY, box.maxZ);
         }
 
+        /** As {@link #intersects(AABB)}, with the box grown by {@code margin} on every side. */
+        public boolean intersects(AABB box, double margin) {
+            return intersects(box.minX - margin, box.minY - margin, box.minZ - margin,
+                    box.maxX + margin, box.maxY + margin, box.maxZ + margin);
+        }
+
         boolean intersectsSection(long section) {
             return intersectsSection(section, range);
         }

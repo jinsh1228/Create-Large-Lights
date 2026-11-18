@@ -25,6 +25,7 @@ import com.mojang.logging.LogUtils;
 
 import io.github.jinsh1228.largelights.CreateLargeLights;
 import io.github.jinsh1228.largelights.FloodlightBlock;
+import io.github.jinsh1228.largelights.LightField;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.culling.Frustum;
@@ -50,8 +51,22 @@ public final class GpuLightProjection {
     private static long frame, shadowUpdates, surfaceDraws;
     private static int lastLights;
 
+    /**
+     * Grows mesh bounds before the cone test: far more than the float error of the shader's basis and positions
+     * (about 1e-4 blocks at 256), so a mesh the shader could light is never skipped.
+     */
+    private static final double CONE_MARGIN = .05;
+
+    /** {@code cone} is the lit volume in the world, as the surface shader bounds it, for skipping meshes outside it. */
     private record Request(BlockPos anchor, Vec3 origin, Vec3 direction, Vec3 up, double tangent,
-                           float range, float strength, int color, int radius, GpuLightGeometry.Scene scene) {
+                           float range, float strength, int color, int radius, GpuLightGeometry.Scene scene,
+                           LightField.Beam cone) {
+        /** Whether the surface shader can light any of this mesh for this light. */
+        boolean lights(GpuLightGeometry.Mesh mesh, Frustum frustum) {
+            if (!mesh.receives()) return false;
+            AABB bounds = mesh.bounds();
+            return frustum.isVisible(bounds) && cone.intersects(bounds, CONE_MARGIN);
+        }
     }
 
     private static final class Shadow {
@@ -144,7 +159,8 @@ public final class GpuLightProjection {
                         SHADOW_SIZE, CACHED_SHADOWS, (long) CACHED_SHADOWS * SHADOW_SIZE * SHADOW_SIZE * 4, LIGHT_BATCH);
             }
             queued.put(anchor.asLong(), new Request(anchor.immutable(), origin, direction, up.normalize(), tangent,
-                    range, strength, color, radius, scene));
+                    range, strength, color, radius, scene,
+                    new LightField.Beam(worldOrigin, direction, tangent, range, 1, 15, radius)));
             return true;
         } catch (RuntimeException error) {
             disable(error);
@@ -291,7 +307,7 @@ public final class GpuLightProjection {
             GL13.glActiveTexture(GL13.GL_TEXTURE1 + i);
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, shadow.texture);
             for (GpuLightGeometry.Mesh mesh : request.scene.meshes()) {
-                if (mesh.receives() && frustum.isVisible(mesh.bounds())) meshes.merge(mesh, 1 << i, (a, b) -> a | b);
+                if (request.lights(mesh, frustum)) meshes.merge(mesh, 1 << i, (a, b) -> a | b);
             }
         }
         Matrix4f view = new Matrix4f();
@@ -330,7 +346,7 @@ public final class GpuLightProjection {
 
     private static boolean visible(Request request, Frustum frustum) {
         for (GpuLightGeometry.Mesh mesh : request.scene.meshes()) {
-            if (mesh.receives() && frustum.isVisible(mesh.bounds())) return true;
+            if (request.lights(mesh, frustum)) return true;
         }
         return false;
     }

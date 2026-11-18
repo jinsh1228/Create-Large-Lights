@@ -9,6 +9,7 @@ import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
@@ -30,17 +31,29 @@ public final class ModelLightOcclusion {
     /** CMS's block-space trace: its outer clip still handles screens, sub-level poses and the nearest hit. */
     public static BlockHitResult trace(Level level, BlockPos ignored, Vec3 from, Vec3 to,
                                        Predicate<BlockPos> allowed) {
+        // Consecutive blocks of a ray are mostly in one chunk: look it up once per chunk crossed.
+        var column = new Object() {
+            int x = Integer.MIN_VALUE, z;
+            ChunkAccess chunk;
+        };
         return BlockGetter.traverseBlocks(from, to, level, (world, pos) -> {
-            if (pos.equals(ignored) || !allowed.test(pos) || level.isOutsideBuildHeight(pos)) {
+            if (pos.equals(ignored) || level.isOutsideBuildHeight(pos)) {
                 return null;
             }
-            var chunk = level.getChunkSource().getChunk(pos.getX() >> 4, pos.getZ() >> 4, ChunkStatus.FULL, false);
+            int chunkX = pos.getX() >> 4, chunkZ = pos.getZ() >> 4;
+            if (chunkX != column.x || chunkZ != column.z) {
+                column.chunk = level.getChunkSource().getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
+                column.x = chunkX;
+                column.z = chunkZ;
+            }
+            ChunkAccess chunk = column.chunk;
             if (chunk == null) {
                 // Unknown terrain remains opaque, without forcing a chunk to load.
-                return Shapes.block().clip(from, to, pos);
+                return allowed.test(pos) ? Shapes.block().clip(from, to, pos) : null;
             }
             BlockState state = chunk.getBlockState(pos);
-            if (state.isAir()) {
+            // Air never stops a ray, whatever the (side-effect-free) CMS filter says, so test it first.
+            if (state.isAir() || !allowed.test(pos)) {
                 return null;
             }
             if (state.isSolidRender(level, pos) && state.isCollisionShapeFullBlock(level, pos)) {

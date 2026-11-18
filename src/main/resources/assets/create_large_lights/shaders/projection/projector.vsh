@@ -8,6 +8,7 @@ uniform mat4 ViewProjection;
 #ifdef LIGHT_BATCH
 uniform mat4 LightProjections[LIGHT_BATCH];
 uniform vec3 SectionOffsets[LIGHT_BATCH];
+uniform int ActiveMask;
 out vec3 localPosition;
 flat out vec3 planeNormal;
 flat out vec4 planeOffsets;
@@ -28,6 +29,12 @@ void main() {
     localPosition = Position;
     planeNormal = GeomNormal;
     for (int i = 0; i < LIGHT_BATCH; i++) {
+        // The fragment shader reads only the lights in ActiveMask (a uniform, so this branch is uniform too).
+        if ((ActiveMask & (1 << i)) == 0) {
+            planeOffsets[i] = 0.0;
+            lightClips[i] = vec4(0.0);
+            continue;
+        }
         vec3 position = Position + SectionOffsets[i];
         planeOffsets[i] = dot(GeomNormal, position);
         lightClips[i] = LightProjections[i] * vec4(position, 1.0);

@@ -13,7 +13,8 @@
     "FlywheelLightMixin",
     "MultipartModelAccessor",
     "WeightedModelAccessor",
-    "LightModelDataMixin"
+    "LightModelDataMixin",
+    "LightOnlySectionsMixin"
   ],
   "injectors": {
     "defaultRequire": 1

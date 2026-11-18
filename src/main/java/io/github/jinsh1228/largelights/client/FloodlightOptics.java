@@ -23,7 +23,10 @@ import net.minecraft.world.phys.Vec3;
 public final class FloodlightOptics implements FixtureOptics {
     public static void register() {
         FixtureOptics.register(CreateLargeLights.MOD_ID, new FloodlightOptics());
-        WorldChanges.onSectionChanged((x, y, z) -> LightModelSnapshots.sectionChanged(SectionPos.asLong(x, y, z)));
+        // Received light data marks 27 sections at a time; their shapes are unchanged (LightOnlyUpdates).
+        WorldChanges.onSectionChanged((x, y, z) -> {
+            if (!LightOnlyUpdates.active()) LightModelSnapshots.sectionChanged(SectionPos.asLong(x, y, z));
+        });
         WorldChanges.onChunkLoaded(LightModelSnapshots::chunkChanged);
         WorldChanges.onChunkUnloaded(LightModelSnapshots::chunkChanged);
         WorldChanges.onLevelChanged(ModelLightOcclusion::clear);
