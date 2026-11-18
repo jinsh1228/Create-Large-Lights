@@ -7,6 +7,7 @@ import org.haruyq.createmediasystems.api.sublevel.SubLevels;
 import org.haruyq.createmediasystems.lighting.LightingConsoleBlock;
 import org.haruyq.createmediasystems.api.lighting.AudioLevels;
 import org.haruyq.createmediasystems.api.lighting.GroupView;
+import org.haruyq.createmediasystems.api.lighting.GroupView.Motion;
 import org.haruyq.createmediasystems.lighting.LightingIllumination;
 import org.haruyq.createmediasystems.api.client.WorldChanges;
 import org.haruyq.createmediasystems.lighting.LightingRaycast;
@@ -141,11 +142,16 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         // Linked, the console's group sets all of it; unlinked, redstone sets how bright (FloodlightBlock.Entity.beam).
         FloodlightBlock.Entity.Beam beam = lamp.beam();
         LightingConsoleBlock.Entity console = beam.console();
-        double seconds = (level.getGameTime() + (double) partialTick) / 20;
+        LightingSettings.Group group = beam.group();
+        long tick = level.getGameTime();
+        double seconds = (tick + (double) partialTick) / 20;
         if (console != null) {
             seconds = console.playhead.seconds(System.nanoTime(), seconds);
         }
-        Matrix4f local = aim(lamp, beam, seconds, partialTick);
+        Motion motion = group == null ? Motion.FIXED : group.motion();
+        boolean sweeping = motion == Motion.SWEEP || motion == Motion.CIRCLE;
+        int order = sweeping ? console.order(lamp.getBlockPos()) : 0;
+        Matrix4f local = aim(lamp, beam, seconds, partialTick, motion, order);
         Matrix4f head = new Matrix4f(model).mul(local);
 
         float lensZ = kind.lensZ;
@@ -160,12 +166,16 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
 
         float strength = beam.strength();
         int color = WARM_WHITE;
-        if (console != null) {
-            LightingSettings.Group group = beam.group();
-            strength = audioStrength(strength, group, console.audio(level.getGameTime()));
-            var shown = console.video(level.getGameTime());
-            color = color(group, lamp.order(), Math.max(1, console.groupSize(lamp.group())), seconds,
-                    shown, lamp.individualColor);
+        if (group != null && strength > 0.001f) {
+            if (group.audio()) strength = audioStrength(strength, group, console.audio(tick));
+            var shown = console.video(tick);
+            GroupView.Mapping mapping = group.mapping();
+            boolean ordered = group.videoColors(shown != null)
+                    || group.colorCount() > 1 && mapping != GroupView.Mapping.PER_FIXTURE;
+            if (ordered && !sweeping) order = console.order(lamp.getBlockPos());
+            int count = ordered && (mapping == GroupView.Mapping.SPLIT || mapping == GroupView.Mapping.GRADIENT)
+                    ? console.groupSize(console.group(lamp.getBlockPos())) : 1;
+            color = color(group, order, count, seconds, shown, lamp.individualColor);
         }
 
         VertexConsumer lens = buffers.getBuffer(LightingRenderer.lensType());
@@ -209,7 +219,7 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
      * motion as a stage light's (a sway, a circle, or following the target player), eased as a stage light's head.
      */
     private static Matrix4f aim(FloodlightBlock.Entity lamp, FloodlightBlock.Entity.Beam beam, double seconds,
-                                float partialTick) {
+                                float partialTick, Motion motion, int order) {
         boolean hold = false;
         LightingConsoleBlock.Entity console = beam.console();
         LightingSettings.Group group = beam.group();
@@ -217,29 +227,29 @@ public final class FloodlightRenderer implements BlockEntityRenderer<FloodlightB
         boolean relative = ceiling && console != null && group != null;
         float yaw = relative ? group.pan : beam.yaw();
         float pitch = relative ? group.tilt : beam.pitch();
-        if (console != null && group != null) {
-            double phase = (group.audio && console.audioSource() != null
-                    ? console.playhead.phase(System.nanoTime(), seconds) : seconds) * group.speed + lamp.order() * 0.35;
-            if (group.motion == LightingSettings.Motion.SWEEP) {
+        if (motion == Motion.SWEEP || motion == Motion.CIRCLE) {
+            double phase = (group.audio() && console.audioSource() != null
+                    ? console.playhead.phase(System.nanoTime(), seconds) : seconds) * group.speed() + order * 0.35;
+            if (motion == Motion.SWEEP) {
                 yaw += (float) Math.sin(phase) * 55;
-            } else if (group.motion == LightingSettings.Motion.CIRCLE) {
+            } else {
                 yaw += (float) Math.sin(phase) * 48;
                 pitch += (float) Math.cos(phase) * 22;
-            } else if (group.motion == LightingSettings.Motion.TRACK) {
-                // Following: straight at the target player; with none, held where it is.
-                hold = true;
-                Player target = group.target == null ? null : lamp.getLevel().getPlayerByUUID(group.target);
-                if (target != null) {
-                    Vec3 body = target.getPosition(partialTick).add(0, target.getBbHeight() * 0.5, 0);
-                    Vec3 toward = SubLevels.toRenderBlockSpace(lamp.getLevel(), lamp.getBlockPos(), body)
-                            .subtract(Vec3.atCenterOf(lamp.getBlockPos()));
-                    if (toward.lengthSqr() > 0.25) {
-                        float[] at = ceiling ? Aim.relativeToward(toward, lamp.yaw, lamp.pitch, group.pan)
-                                : Aim.toward(toward, yaw);
-                        yaw = at[0];
-                        pitch = at[1];
-                        hold = false;
-                    }
+            }
+        } else if (motion == Motion.TRACK) {
+            // Following: straight at the target player; with none, held where it is.
+            hold = true;
+            Player target = group.target == null ? null : lamp.getLevel().getPlayerByUUID(group.target);
+            if (target != null) {
+                Vec3 body = target.getPosition(partialTick).add(0, target.getBbHeight() * 0.5, 0);
+                Vec3 toward = SubLevels.toRenderBlockSpace(lamp.getLevel(), lamp.getBlockPos(), body)
+                        .subtract(Vec3.atCenterOf(lamp.getBlockPos()));
+                if (toward.lengthSqr() > 0.25) {
+                    float[] at = ceiling ? Aim.relativeToward(toward, lamp.yaw, lamp.pitch, group.pan)
+                            : Aim.toward(toward, yaw);
+                    yaw = at[0];
+                    pitch = at[1];
+                    hold = false;
                 }
             }
         }

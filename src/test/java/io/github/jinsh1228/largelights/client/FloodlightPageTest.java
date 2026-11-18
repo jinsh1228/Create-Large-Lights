@@ -2,11 +2,20 @@ package io.github.jinsh1228.largelights.client;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import org.haruyq.createmediasystems.api.lighting.GroupView.Motion;
 import org.junit.jupiter.api.Test;
 
 import io.github.jinsh1228.largelights.Aim;
 
 class FloodlightPageTest {
+    @Test
+    void motionControlWrapsOverSupportedModesEvenWhenCmsAddsMore() {
+        assertEquals(Motion.FIXED.ordinal(), FloodlightPage.stepMotion(Motion.TRACK, 1));
+        assertEquals(Motion.TRACK.ordinal(), FloodlightPage.stepMotion(Motion.FIXED, -1));
+        assertEquals(Motion.SWEEP.ordinal(), FloodlightPage.stepMotion(Motion.RANDOM, 1));
+        assertEquals(Motion.TRACK.ordinal(), FloodlightPage.stepMotion(Motion.CROSS, -1));
+    }
+
     @Test
     void whitesFindTheirNearestTemperature() {
         // A bulb's warm white, and the floodlights' redstone white (nearest 5700K).

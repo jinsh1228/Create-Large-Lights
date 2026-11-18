@@ -82,6 +82,17 @@ public final class FloodlightPage implements ConsolePage {
         return console.groupSettings(group(console));
     }
 
+    private static int motionIndex(GroupView.Motion motion) {
+        return switch (motion) {
+            case SWEEP, CIRCLE, TRACK -> motion.ordinal();
+            default -> GroupView.Motion.FIXED.ordinal();
+        };
+    }
+
+    static int stepMotion(GroupView.Motion motion, int step) {
+        return Math.floorMod(motionIndex(motion) + step, GroupView.Motion.TRACK.ordinal() + 1);
+    }
+
     private static int color(ConsoleView console) {
         GroupView group = selected(console);
         return group.color(Math.min(console.selectedColor(), LightingSettings.COLORS - 1));
@@ -280,7 +291,7 @@ public final class FloodlightPage implements ConsolePage {
                 ConsoleSurface.number(level)), 0.84f);
         surface.monitorText(3.08f, rowTop(3) - 0.015f, text("fixtures_now", ConsoleSurface.number(fixtures)), 0.84f);
         surface.monitorText(3.08f, rowTop(MOTION_ROW) - 0.015f, text("motion_now",
-                ConsoleSurface.mode(group.motion().name().toLowerCase(java.util.Locale.ROOT))), 0.84f);
+                ConsoleSurface.mode("motion." + motionIndex(group.motion()))), 0.84f);
         surface.monitorText(3.08f, rowTop(TARGET_ROW) - 0.015f, text("target_now", target(console)), 0.84f);
     }
 
@@ -347,11 +358,11 @@ public final class FloodlightPage implements ConsolePage {
             }
             if (row(3, MOTION_ROW).contains(point.x, point.y)) {
                 return new Thing(row(3, MOTION_ROW), true, text("motion"),
-                        () -> ConsoleSurface.mode(selected(console).motion().name().toLowerCase(java.util.Locale.ROOT)))
+                        () -> ConsoleSurface.mode("motion." + motionIndex(selected(console).motion())))
                         .onPress(shift -> console.set(ConsoleSetting.MOTION, g, 0,
-                                Math.floorMod(selected(console).motion().ordinal() + (shift ? -1 : 1), GroupView.Motion.values().length), 0))
+                                stepMotion(selected(console).motion(), shift ? -1 : 1), 0))
                         .onScroll((step, shift) -> console.set(ConsoleSetting.MOTION, g, 0,
-                                Math.floorMod(selected(console).motion().ordinal() + step, GroupView.Motion.values().length), 0));
+                                stepMotion(selected(console).motion(), step), 0));
             }
             if (row(3, TARGET_ROW).contains(point.x, point.y)) {
                 return new Thing(row(3, TARGET_ROW), true, text("target"), () -> target(console))
