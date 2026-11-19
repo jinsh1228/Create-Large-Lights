@@ -7,6 +7,7 @@ import java.lang.reflect.Method;
 import java.nio.FloatBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import com.mojang.logging.LogUtils;
@@ -83,8 +84,11 @@ public final class GpuBatchValidation {
     private static void verify(RenderLevelStageEvent event, List<Light> lights, int phase) throws Exception {
         Minecraft mc = Minecraft.getInstance();
         int width = mc.getMainRenderTarget().width, height = mc.getMainRenderTarget().height;
-        int[] textures = new int[2], fbos = new int[2];
+        boolean checkParts = "dense".equals(System.getProperty("createLargeLights.gpuDemo.scene"));
+        int passes = checkParts ? 3 : 2;
+        int[] textures = new int[passes], fbos = new int[passes];
         FloatBuffer reference = MemoryUtil.memAllocFloat(width * height * 4), actual = MemoryUtil.memAllocFloat(reference.capacity());
+        FloatBuffer whole = checkParts ? MemoryUtil.memAllocFloat(reference.capacity()) : null;
         float[] clear = new float[4];
         GL11.glGetFloatv(GL11.GL_COLOR_CLEAR_VALUE, clear);
         int pack = GL11.glGetInteger(GL21.GL_PIXEL_PACK_BUFFER_BINDING), program = 0;
@@ -94,7 +98,7 @@ public final class GpuBatchValidation {
                 for (int i = 0; i <= BATCH; i++) GL33.glBindSampler(i, 0);
             program = referenceProgram();
             Matrix4f camera = new Matrix4f(event.getProjectionMatrix()).mul(event.getModelViewMatrix());
-            for (int mode = 0; mode < 2; mode++) {
+            for (int mode = 0; mode < passes; mode++) {
                 textures[mode] = GL11.glGenTextures();
                 GL13.glActiveTexture(GL13.GL_TEXTURE0);
                 GL11.glBindTexture(GL11.GL_TEXTURE_2D, textures[mode]);
@@ -112,22 +116,20 @@ public final class GpuBatchValidation {
                 GL11.glClearColor(0, 0, 0, 0);
                 GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
                 if (mode == 0) reference(lights, event, camera, program);
-                else {
-                    try (AutoCloseable saved = guard()) {
-                        Method surfaces = method(GpuLightProjection.class, "surfaces");
-                        for (int at = 0; at < lights.size(); at += BATCH) {
-                            Object requests = Array.newInstance(lights.getFirst().request.getClass(), BATCH);
-                            Object maps = Array.newInstance(lights.getFirst().shadow.getClass(), BATCH);
-                            int count = Math.min(BATCH, lights.size() - at);
-                            for (int i = 0; i < count; i++) {
-                                Array.set(requests, i, lights.get(at + i).request);
-                                Array.set(maps, i, lights.get(at + i).shadow);
-                            }
-                            surfaces.invoke(null, requests, maps, count, saved, camera, event.getCamera().getPosition(), event.getFrustum());
-                        }
-                    }
+                else batch(lights, event, camera, mode == 2);
+                GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_FLOAT,
+                        mode == 0 ? reference : mode == 1 ? actual : whole);
+            }
+            if (checkParts) {
+                int changed = 0;
+                double max = 0;
+                for (int i = 0; i < actual.capacity(); i++) {
+                    double difference = Math.abs(actual.get(i) - whole.get(i));
+                    if (!Double.isFinite(difference) || difference > 1e-6) changed++;
+                    max = Math.max(max, difference);
                 }
-                GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_FLOAT, mode == 0 ? reference : actual);
+                LogUtils.getLogger().info("GPU_PARTS CHECK {}: view={} lights={} components={} changed={} max_abs={}",
+                        changed == 0 ? "PASS" : "FAIL", phase, lights.size(), actual.capacity(), changed, max);
             }
             int bad = 0, lit = 0;
             double max = 0, sum = 0;
@@ -148,6 +150,40 @@ public final class GpuBatchValidation {
             for (int texture : textures) if (texture != 0) GL11.glDeleteTextures(texture);
             if (program != 0) GL20.glDeleteProgram(program);
             MemoryUtil.memFree(reference); MemoryUtil.memFree(actual);
+            if (whole != null) MemoryUtil.memFree(whole);
+        }
+    }
+
+    private static void batch(List<Light> lights, RenderLevelStageEvent event, Matrix4f camera, boolean whole) throws Exception {
+        Map<GpuLightGeometry.Mesh, Object> changed = new IdentityHashMap<>();
+        Field parts = whole ? field(GpuLightGeometry.Mesh.class, "parts") : null;
+        try (AutoCloseable saved = guard()) {
+            if (parts != null) {
+                for (Light light : lights) {
+                    var scene = (GpuLightGeometry.Scene) get(light.request, "scene");
+                    for (var mesh : scene.meshes()) {
+                        if (changed.containsKey(mesh)) continue;
+                        var previous = (List<?>) parts.get(mesh);
+                        if (previous.isEmpty()) continue;
+                        changed.put(mesh, previous);
+                        parts.set(mesh, List.of());
+                    }
+                }
+                if (changed.isEmpty()) throw new IllegalStateException("Dense test built no partitioned geometry");
+            }
+            Method surfaces = method(GpuLightProjection.class, "surfaces");
+            for (int at = 0; at < lights.size(); at += BATCH) {
+                Object requests = Array.newInstance(lights.getFirst().request.getClass(), BATCH);
+                Object maps = Array.newInstance(lights.getFirst().shadow.getClass(), BATCH);
+                int count = Math.min(BATCH, lights.size() - at);
+                for (int i = 0; i < count; i++) {
+                    Array.set(requests, i, lights.get(at + i).request);
+                    Array.set(maps, i, lights.get(at + i).shadow);
+                }
+                surfaces.invoke(null, requests, maps, count, saved, camera, event.getCamera().getPosition(), event.getFrustum());
+            }
+        } finally {
+            for (var entry : changed.entrySet()) parts.set(entry.getKey(), entry.getValue());
         }
     }
 

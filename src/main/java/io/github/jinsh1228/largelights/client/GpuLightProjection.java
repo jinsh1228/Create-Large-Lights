@@ -316,16 +316,50 @@ public final class GpuLightProjection {
             BlockPos origin = mesh.origin();
             matrix(surface.viewProjection, view.set(cameraProjection).translate((float) (origin.getX() - camera.x),
                     (float) (origin.getY() - camera.y), (float) (origin.getZ() - camera.z)));
-            GL20.glUniform1i(surface.activeMask, entry.getValue());
             for (int i = 0; i < count; i++) {
                 BlockPos anchor = requests[i].anchor;
                 GL20.glUniform3f(surface.lights[i].offset, origin.getX() - anchor.getX(),
                         origin.getY() - anchor.getY(), origin.getZ() - anchor.getZ());
             }
-            mesh.draw();
-            surfaceDraws++;
+            drawSurface(mesh, entry.getValue(), requests, count, frustum);
         }
         lastLights += count;
+    }
+
+    private static void drawSurface(GpuLightGeometry.Mesh mesh, int mask, Request[] requests, int count, Frustum frustum) {
+        if (!mesh.parts().isEmpty()) {
+            // A wide beam typically covers the section. Keep its single draw.
+            boolean narrow = true;
+            for (int i = 0; i < count; i++) {
+                if ((mask & 1 << i) != 0 && requests[i].tangent > .27) narrow = false;
+            }
+            if (narrow) {
+                int first = 0, end = 0, previousMask = 0;
+                for (var part : mesh.parts()) {
+                    int partMask = 0;
+                    if (frustum.isVisible(part.bounds())) {
+                        for (int i = 0; i < count; i++) {
+                            if ((mask & 1 << i) != 0 && requests[i].cone.intersects(part.bounds(), CONE_MARGIN)) partMask |= 1 << i;
+                        }
+                    }
+                    if (partMask != previousMask && previousMask != 0) drawPart(mesh, first, end, previousMask);
+                    if (partMask != previousMask) first = part.first();
+                    end = part.first() + part.count();
+                    previousMask = partMask;
+                }
+                if (previousMask != 0) drawPart(mesh, first, end, previousMask);
+                return;
+            }
+        }
+        GL20.glUniform1i(surface.activeMask, mask);
+        mesh.draw();
+        surfaceDraws++;
+    }
+
+    private static void drawPart(GpuLightGeometry.Mesh mesh, int first, int end, int mask) {
+        GL20.glUniform1i(surface.activeMask, mask);
+        mesh.drawPart(first, end - first);
+        surfaceDraws++;
     }
 
     private static Shadow shadow(long id, Set<Long> pinned) {

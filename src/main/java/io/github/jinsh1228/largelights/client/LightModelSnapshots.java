@@ -86,34 +86,45 @@ public final class LightModelSnapshots {
     }
 
     public static List<BakedQuad> quads(Level level, BlockPos pos, BlockState state, Direction side) {
-        return snapshot(level, pos, state).sides.get(side == null ? 6 : side.get3DDataValue());
+        return snapshot(level, pos, state, false).sides.get(side == null ? 6 : side.get3DDataValue());
     }
 
     static List<ModelLightOcclusion.Quad> occluders(Level level, BlockPos pos, BlockState state) {
-        return snapshot(level, pos, state).occluders;
+        return snapshot(level, pos, state, true).occluders;
     }
 
-    private static Snapshot snapshot(Level level, BlockPos pos, BlockState state) {
+    private static Snapshot snapshot(Level level, BlockPos pos, BlockState state, boolean trace) {
         Cache current = cache;
+        Snapshot known = null;
         if (current.level == level) {
-            Snapshot shared = current.models.get(state);
-            if (shared != null) return shared;
-            Section section = current.sections.get(SectionPos.asLong(pos));
-            Entry entry = section == null ? null : section.entries.get(pos.asLong());
-            if (entry != null && entry.state == state) return entry.snapshot;
+            known = current.models.get(state);
+            if (known == null) {
+                Section section = current.sections.get(SectionPos.asLong(pos));
+                Entry entry = section == null ? null : section.entries.get(pos.asLong());
+                if (entry != null && entry.state == state) known = entry.snapshot;
+            }
         }
+        if (known != null && (!trace || known.occluders != null)) return known;
         // ModelDataManager and native sprite pixels belong to the client thread.
-        // Submit one entire model miss, never seven side misses or a task while holding a map lock.
         if (!RenderSystem.isOnRenderThread()) {
             BlockPos at = pos.immutable();
-            return Minecraft.getInstance().submit(() -> snapshot(level, at, state)).join();
+            return Minecraft.getInstance().submit(() -> snapshot(level, at, state, trace)).join();
         }
         if (Minecraft.getInstance().level != level) return EMPTY;
         if (cache.level != level) cache = new Cache(level);
-        return cache.load(pos, state);
+        if (known == null) known = cache.load(pos, state);
+        if (trace && known.occluders == null) cache.prepareOccluders(known);
+        return known;
     }
 
-    private record Snapshot(List<List<BakedQuad>> sides, List<ModelLightOcclusion.Quad> occluders) {
+    private static final class Snapshot {
+        final List<List<BakedQuad>> sides;
+        volatile List<ModelLightOcclusion.Quad> occluders;
+
+        Snapshot(List<List<BakedQuad>> sides, List<ModelLightOcclusion.Quad> occluders) {
+            this.sides = sides;
+            this.occluders = occluders;
+        }
     }
 
     private record Entry(BlockState state, Snapshot snapshot) {
@@ -183,23 +194,11 @@ public final class LightModelSnapshots {
             return fixed;
         }
 
-        private Snapshot bake(BakedModel model, BlockPos pos, BlockState state) {
-            ModelData raw = level.getModelDataManager().getAt(pos);
-            ModelData data = model.getModelData(level, pos, state, raw);
-            long seed = state.getSeed(pos);
-            RandomSource random = RandomSource.create(seed);
-            var layers = model.getRenderTypes(state, random, data);
-            List<List<BakedQuad>> sides = new ArrayList<>(7);
+        void prepareOccluders(Snapshot snapshot) {
+            // Only ray tracing needs heap copies of model vertices and sprite alpha.
             List<ModelLightOcclusion.Quad> occluders = new ArrayList<>();
-            for (int side = 0; side <= 6; side++) {
-                Direction direction = side == 6 ? null : Direction.from3DDataValue(side);
-                List<BakedQuad> quads = new ArrayList<>();
-                for (var layer : layers) {
-                    random.setSeed(seed);
-                    quads.addAll(model.getQuads(state, direction, random, data, layer));
-                }
-                sides.add(List.copyOf(quads));
-                for (BakedQuad quad : quads) {
+            for (var side : snapshot.sides) {
+                for (BakedQuad quad : side) {
                     TextureAtlasSprite sprite = quad.getSprite();
                     ModelLightOcclusion.Alpha alpha = sprites.computeIfAbsent(sprite, Cache::pixels);
                     int[] vertices = quad.getVertices();
@@ -216,7 +215,26 @@ public final class LightModelSnapshots {
                     occluders.add(new ModelLightOcclusion.Quad(points, uv, alpha));
                 }
             }
-            return new Snapshot(List.copyOf(sides), List.copyOf(occluders));
+            snapshot.occluders = List.copyOf(occluders);
+        }
+
+        private Snapshot bake(BakedModel model, BlockPos pos, BlockState state) {
+            ModelData raw = level.getModelDataManager().getAt(pos);
+            ModelData data = model.getModelData(level, pos, state, raw);
+            long seed = state.getSeed(pos);
+            RandomSource random = RandomSource.create(seed);
+            var layers = model.getRenderTypes(state, random, data);
+            List<List<BakedQuad>> sides = new ArrayList<>(7);
+            for (int side = 0; side <= 6; side++) {
+                Direction direction = side == 6 ? null : Direction.from3DDataValue(side);
+                List<BakedQuad> quads = new ArrayList<>();
+                for (var layer : layers) {
+                    random.setSeed(seed);
+                    quads.addAll(model.getQuads(state, direction, random, data, layer));
+                }
+                sides.add(List.copyOf(quads));
+            }
+            return new Snapshot(List.copyOf(sides), null);
         }
 
         private static ModelLightOcclusion.Alpha pixels(TextureAtlasSprite sprite) {

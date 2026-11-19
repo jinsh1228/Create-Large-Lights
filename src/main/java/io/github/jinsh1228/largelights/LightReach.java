@@ -139,9 +139,11 @@ public final class LightReach {
         List<Wall> walls = new ArrayList<>();
         Vec3 d = beam.direction();
         Vec3 u = d.cross(Math.abs(d.y) < .9 ? new Vec3(0, 1, 0) : new Vec3(1, 0, 0)).normalize(), v = d.cross(u);
+        // Probe within the radius-capped beam. Every candidate wall still needs a complete opacity proof.
+        double tangent = beam.range() * beam.tangent() <= beam.radius() ? beam.tangent() : beam.radius() / beam.range();
         for (int i = -1; i < 8; i++) {
             double angle = i * Math.PI / 4;
-            Vec3 aim = i < 0 ? d : d.add(u.scale(Math.cos(angle) * beam.tangent())).add(v.scale(Math.sin(angle) * beam.tangent()));
+            Vec3 aim = i < 0 ? d : d.add(u.scale(Math.cos(angle) * tangent)).add(v.scale(Math.sin(angle) * tangent));
             Vec3 end = beam.origin().add(aim.scale(beam.range()));
             BlockGetter.traverseBlocks(beam.origin(), end, source, (ignored, pos) -> {
                 if (pos.equals(ignored) || !opaque.test(pos)) return null;

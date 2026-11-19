@@ -96,6 +96,7 @@ if (gpuDemo) {
         systemProperty 'createLargeLights.gpuDemo.lightCount', providers.gradleProperty('gpuLights').getOrElse('1')
         systemProperty 'createLargeLights.gpuDemo.angle', providers.gradleProperty('gpuAngle').getOrElse('oblique')
         systemProperty 'createLargeLights.gpuDemo.performance', providers.gradleProperty('gpuPerf').isPresent().toString()
+        systemProperty 'createLargeLights.gpuDemo.scene', providers.gradleProperty('gpuScene').getOrElse('room')
         systemProperty 'createLargeLights.gpuDemo.motion', providers.gradleProperty('gpuMotion').getOrElse('0')
         if (providers.gradleProperty('gpuRange').isPresent()) systemProperty 'createLargeLights.gpuDemo.range', providers.gradleProperty('gpuRange').get()
         if (providers.gradleProperty('gpuHeight').isPresent()) systemProperty 'createLargeLights.gpuDemo.height', providers.gradleProperty('gpuHeight').get()

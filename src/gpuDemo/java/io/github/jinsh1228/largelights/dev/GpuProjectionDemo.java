@@ -71,6 +71,8 @@ public final class GpuProjectionDemo {
     private static final float NEAR = .25f;
     private static final boolean ENABLED = Boolean.getBoolean("createLargeLights.gpuDemo");
     private static final boolean PERFORMANCE = Boolean.getBoolean("createLargeLights.gpuDemo.performance");
+    private static final String SCENE = System.getProperty("createLargeLights.gpuDemo.scene", "room");
+    private static final int SPREAD = SCENE.equals("dense") ? 16 : 80;
     private static final String MODE = System.getProperty("createLargeLights.gpuDemo.mode", "gpu");
     private static final boolean GPU = "gpu".equals(MODE);
     private static final int SIZE = Math.max(256, Math.min(4096, Integer.getInteger("createLargeLights.gpuDemo.shadowSize", 1024)));
@@ -78,7 +80,7 @@ public final class GpuProjectionDemo {
     private static final int RANGE = Integer.getInteger("createLargeLights.gpuDemo.range", PERFORMANCE ? 128 : 64);
     private static final BlockPos LAMP = new BlockPos(0, FLOOR + Integer.getInteger("createLargeLights.gpuDemo.height", PERFORMANCE ? 60 : 24), vertical() ? 5 : -10);
     private static final List<BlockPos> LAMPS = lampPositions();
-    private static final BlockPos SECOND_CONSOLE = new BlockPos(32, FLOOR + 1, 24);
+    private static final BlockPos SECOND_CONSOLE = new BlockPos(32, SCENE.equals("outdoor") ? LAMP.getY() - 8 : FLOOR + 1, 24);
     private static final List<Projector> projectors = new ArrayList<>();
     private static Level knownLevel;
     private static int ticks;
@@ -172,7 +174,7 @@ public final class GpuProjectionDemo {
 
     private static boolean configured(FloodlightBlock.Entity.Beam beam) {
         return beam.console() != null && beam.group() != null && beam.strength() == 1
-                && beam.range() == RANGE && beam.spread() == 80 && beam.group().colors[0] == 0x55CCFF;
+                && beam.range() == RANGE && beam.spread() == SPREAD && beam.group().colors[0] == 0x55CCFF;
     }
 
     private static void link(ServerLevel level) {
@@ -187,7 +189,7 @@ public final class GpuProjectionDemo {
             group.brightness = 1; group.range = RANGE; group.pan = 0; group.tilt = Aim.NEUTRAL_TILT;
             group.motion = org.haruyq.createmediasystems.lighting.LightingSettings.byId(org.haruyq.createmediasystems.lighting.LightingSettings.Motion.values(), Integer.getInteger("createLargeLights.gpuDemo.motion", 0));
             group.colorCount = 1; group.colors[0] = 0x55CCFF;
-            ConsoleSettings.setSpread(second, 0, 80);
+            ConsoleSettings.setSpread(second, 0, SPREAD);
             ConsoleSettings.setRealLight(second, 0, true);
         }
         for (int i = 0; i < LAMPS.size(); i++) {
@@ -213,8 +215,8 @@ public final class GpuProjectionDemo {
             signature = 31 * signature + Float.floatToIntBits(beam.yaw());
             signature = 31 * signature + Float.floatToIntBits(beam.pitch());
         }
-        LogUtils.getLogger().info("GPU_TRIAL_CONFIG mode={} angle={} lights={} signature={} strength=1 spread=80 range={} color=55CCFF all_fixtures_verified=true",
-                MODE, vertical() ? "vertical" : "oblique", LIGHT_COUNT, signature, RANGE);
+        LogUtils.getLogger().info("GPU_TRIAL_CONFIG mode={} angle={} lights={} signature={} strength=1 spread={} range={} color=55CCFF all_fixtures_verified=true",
+                MODE, vertical() ? "vertical" : "oblique", LIGHT_COUNT, signature, SPREAD, RANGE);
         return true;
     }
 
@@ -226,20 +228,24 @@ public final class GpuProjectionDemo {
                     Blocks.SMOOTH_STONE_SLAB.defaultBlockState(), Blocks.SMOOTH_STONE_SLAB.defaultBlockState().setValue(SlabBlock.TYPE, SlabType.TOP),
                     AllBlocks.COPYCAT_PANEL.getDefaultState(), AllBlocks.COPYCAT_STEP.getDefaultState()};
             int count = 0;
-            for (int x = -36; x <= 36; x += 3) {
-                for (int z = -36; z <= 36; z += 3) {
+            boolean dense = SCENE.equals("dense");
+            int extent = dense ? 25 : 36;
+            int step = dense ? 1 : 3;
+            for (int x = -extent; x <= extent; x += step) {
+                for (int z = -extent; z <= extent; z += step) {
                     if (x >= 10 && x <= 20 && z >= -14 && z <= -6) continue;
-                    for (int y = 1; y <= 3; y++) {
+                    int height = dense ? 2 + Math.floorMod(3 * x + 5 * z, 10) : 3;
+                    for (int y = 1; y <= height; y++) {
                         BlockPos pos = new BlockPos(x, FLOOR + y, z);
                         level.setBlock(pos, shapes[Math.floorMod(x + z + y, shapes.length)], Block.UPDATE_ALL);
                         if (level.getBlockEntity(pos) instanceof CopycatBlockEntity copycat) {
                             copycat.setMaterial((x & 1) == 0 ? Blocks.OAK_PLANKS.defaultBlockState() : Blocks.STONE.defaultBlockState());
                         }
                     }
-                    count += 3;
+                    count += height;
                 }
             }
-            LogUtils.getLogger().info("PERF_SCENE room=81x81x66 partial_blocks={} real_light=true", count);
+            LogUtils.getLogger().info("PERF_SCENE scene={} partial_blocks={} real_light=true", SCENE, count);
         }
         if (LIGHT_COUNT > 64) {
             for (int x = 0; x < 4; x++) {

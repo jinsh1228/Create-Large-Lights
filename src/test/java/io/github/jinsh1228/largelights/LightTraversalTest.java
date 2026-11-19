@@ -53,6 +53,13 @@ class LightTraversalTest {
                 public boolean blocked(BlockPos pos) { actual.add(pos.immutable()); return false; }
             }));
             assertEquals(expected, actual, "ray " + i);
+
+            List<BlockPos> skipped = new ArrayList<>();
+            assertTrue(LightTraversal.clear(from, to, new LightTraversal.Test() {
+                public int skip(BlockPos pos) { return empty(pos); }
+                public boolean blocked(BlockPos pos) { skipped.add(pos.immutable()); return false; }
+            }));
+            assertEquals(expected.stream().filter(pos -> empty(pos) == 0).toList(), skipped, "empty sections, ray " + i);
         }
     }
 

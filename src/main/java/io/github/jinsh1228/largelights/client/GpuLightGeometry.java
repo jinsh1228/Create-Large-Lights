@@ -10,6 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.joml.Vector3d;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
@@ -59,6 +60,10 @@ public final class GpuLightGeometry {
     private static final int[][] BOX_NORMALS = {{0, 0, -1}, {0, 0, 1}, {-1, 0, 0},
             {1, 0, 0}, {0, -1, 0}, {0, 1, 0}};
     private static final int MAX_METADATA = 4096;
+    private static final int PARTS = 8;
+    private static final int PART_SIZE = 512;
+    // Fine culling pays for itself only when a section has enough vertices to skip.
+    private static final int PART_MIN_VERTICES = 4096;
     private static final long MAX_BYTES = 64L << 20;
     private static final int MAX_SECTION_FLOATS = (8 << 20) / Float.BYTES;
     private static final long BUILD_NANOS = 2_000_000;
@@ -75,6 +80,9 @@ public final class GpuLightGeometry {
         }
     }
 
+    record Part(AABB bounds, int first, int count) {
+    }
+
     public static final class Mesh {
         private final BlockPos origin;
         private final boolean receives;
@@ -83,6 +91,7 @@ public final class GpuLightGeometry {
         private long bytes;
         private Map<Long, Span> blocks = Map.of();
         private AABB bounds;
+        private List<Part> parts = List.of();
 
         private Mesh(BlockPos origin, boolean receives) {
             this.origin = origin;
@@ -130,23 +139,49 @@ public final class GpuLightGeometry {
             }
         }
 
+        List<Part> parts() {
+            return parts;
+        }
+
+        void drawPart(int first, int count) {
+            GL30.glBindVertexArray(vao);
+            drawRange(first, count);
+        }
+
         private void drawRange(int first, int count) {
             if (ibo == 0) GL11.glDrawArrays(GL11.GL_TRIANGLES, first, count);
             else GL11.glDrawElements(GL11.GL_TRIANGLES, count, GL11.GL_UNSIGNED_INT, first * (long) Integer.BYTES);
         }
 
-        private void upload(FloatArrayList values) {
-            if (values.isEmpty()) return;
+        private AABB bounds(FloatArrayList values, int start, int end) {
             float[] vertices = values.elements();
             float minX = Float.POSITIVE_INFINITY, minY = minX, minZ = minX;
             float maxX = Float.NEGATIVE_INFINITY, maxY = maxX, maxZ = maxX;
-            for (int vertex = 0; vertex < values.size(); vertex += STRIDE) {
+            for (int vertex = start; vertex < end; vertex += STRIDE) {
                 minX = Math.min(minX, vertices[vertex]); maxX = Math.max(maxX, vertices[vertex]);
                 minY = Math.min(minY, vertices[vertex + 1]); maxY = Math.max(maxY, vertices[vertex + 1]);
                 minZ = Math.min(minZ, vertices[vertex + 2]); maxZ = Math.max(maxZ, vertices[vertex + 2]);
             }
-            bounds = new AABB(minX, minY, minZ, maxX, maxY, maxZ).move(origin).inflate(.001);
-            boolean indexed = packedBytes(values) < (long) values.size() * Float.BYTES;
+            return new AABB(minX, minY, minZ, maxX, maxY, maxZ).move(origin).inflate(.001);
+        }
+
+        private void upload(FloatArrayList values, long packedSize, int[] ends) {
+            if (values.isEmpty()) return;
+            if (ends == null || values.size() < PART_MIN_VERTICES * STRIDE) {
+                bounds = bounds(values, 0, values.size());
+            } else {
+                var parts = new ArrayList<Part>(PARTS);
+                int start = 0;
+                for (int end : ends) {
+                    if (start == end) continue;
+                    AABB bounds = bounds(values, start, end);
+                    this.bounds = this.bounds == null ? bounds : this.bounds.minmax(bounds);
+                    parts.add(new Part(bounds, start / STRIDE, (end - start) / STRIDE));
+                    start = end;
+                }
+                if (parts.size() > 1) this.parts = List.copyOf(parts);
+            }
+            boolean indexed = packedSize < (long) values.size() * Float.BYTES;
             IntArrayList indices = indexed ? new IntArrayList(values.size() / STRIDE) : null;
             int packed = indexed ? compact(values, indices) : values.size();
             vao = GL30.glGenVertexArrays();
@@ -224,7 +259,7 @@ public final class GpuLightGeometry {
     public static void chunkChanged(int x, int z) {
         if (cache == null) return;
         cache.opaqueKey = Long.MIN_VALUE;
-        cache.opaqueMask = null;
+        cache.opaqueSection = null;
         cache.opaqueSections.keySet().removeIf((java.util.function.LongPredicate) key -> Math.abs(SectionPos.x(key) - x) <= 1
                 && Math.abs(SectionPos.z(key) - z) <= 1);
         cache.reach.invalidate(new AABB(x * 16.0 - 1, -1e9, z * 16.0 - 1, x * 16.0 + 17, 1e9, z * 16.0 + 17));
@@ -344,7 +379,18 @@ public final class GpuLightGeometry {
         }
     }
 
+    private static final class OpacitySection {
+        final LevelChunkSection blocks;
+        final long[] mask;
+
+        OpacitySection(LevelChunkSection blocks) {
+            this.blocks = blocks;
+            mask = blocks == null ? null : new long[128];
+        }
+    }
+
     private static final class Cache {
+        private static final OpacitySection EMPTY_OPACITY = new OpacitySection(null);
         final ClientLevel level;
         final Map<Long, Entry> sections = new LinkedHashMap<>();
         final Map<Query, Membership> memberships = new LinkedHashMap<>();
@@ -352,9 +398,9 @@ public final class GpuLightGeometry {
         final Map<BlockState, Boolean> fullStates = new HashMap<>();
         final Map<BlockState, Boolean> opaqueStates = new HashMap<>();
         final LightReach reach = new LightReach(this::opaque);
-        final Long2ObjectLinkedOpenHashMap<long[]> opaqueSections = new Long2ObjectLinkedOpenHashMap<>();
+        final Long2ObjectLinkedOpenHashMap<OpacitySection> opaqueSections = new Long2ObjectLinkedOpenHashMap<>();
         long opaqueKey = Long.MIN_VALUE;
-        long[] opaqueMask;
+        OpacitySection opaqueSection;
         final ArrayDeque<Entry> pending = new ArrayDeque<>();
         final Mesh unknown = new Mesh(BlockPos.ZERO, false);
         long frame = Long.MIN_VALUE, bytes, epoch;
@@ -391,13 +437,16 @@ public final class GpuLightGeometry {
             for (int x = minX; x <= maxX; x++) {
                 for (int z = minZ; z <= maxZ; z++) {
                     LevelChunk chunk = chunk(x, z);
-                    boolean intersects = false;
                     for (int y = minY; y <= maxY; y++) {
+                        if (chunk != null && chunk.getSection(y - level.getMinSection()).hasOnlyAir()) continue;
                         if (!intersects(query, x, y, z)) continue;
                         if (reach.hidden(source, beam, new AABB(x * 16.0 - 2, y * 16.0 - 2, z * 16.0 - 2,
                                 x * 16.0 + 18, y * 16.0 + 18, z * 16.0 + 18))) continue;
-                        intersects = true;
-                        if (chunk == null || chunk.getSection(y - level.getMinSection()).hasOnlyAir()) continue;
+                        if (chunk == null) {
+                            needsUnknown = true;
+                            missing.add(new Mesh(new BlockPos(x << 4, level.getMinBuildHeight(), z << 4), unknown));
+                            break;
+                        }
                         long key = SectionPos.asLong(x, y, z);
                         Entry entry = sections.get(key);
                         if (entry == null) {
@@ -409,10 +458,6 @@ public final class GpuLightGeometry {
                             sections.put(key, entry);
                         }
                         entries.add(entry);
-                    }
-                    if (chunk == null && intersects) {
-                        needsUnknown = true;
-                        missing.add(new Mesh(new BlockPos(x << 4, level.getMinBuildHeight(), z << 4), unknown));
                     }
                 }
             }
@@ -436,7 +481,7 @@ public final class GpuLightGeometry {
             if (needsUnknown && unknown.vao == 0) {
                 FloatArrayList values = new FloatArrayList();
                 box(values, 0, 0, 0, 16, level.getHeight(), 16);
-                unknown.upload(values);
+                unknown.upload(values, packedBytes(values), null);
                 bytes += unknown.bytes;
                 epoch++;
             }
@@ -486,7 +531,8 @@ public final class GpuLightGeometry {
                 entry.failed = true;
                 return;
             }
-            long size = packedBytes(build.surface) + packedBytes(build.caster);
+            long surfaceSize = packedBytes(build.surface), casterSize = packedBytes(build.caster);
+            long size = surfaceSize + casterSize;
             for (Entry old : sections.values()) {
                 if (bytes - entry.bytes + size <= MAX_BYTES) break;
                 if (old != entry && old.used < frame - 1) release(old);
@@ -498,11 +544,11 @@ public final class GpuLightGeometry {
             release(entry);
             if (!build.surface.isEmpty()) {
                 entry.surface = new Mesh(build.origin, true);
-                entry.surface.upload(build.surface);
+                entry.surface.upload(build.surface, surfaceSize, build.surfaceEnds);
             }
             if (!build.caster.isEmpty()) {
                 entry.caster = new Mesh(build.origin, false);
-                entry.caster.upload(build.caster);
+                entry.caster.upload(build.caster, casterSize, null);
                 entry.caster.blocks = Map.copyOf(build.casterBlocks);
             }
             entry.bytes = size;
@@ -551,7 +597,7 @@ public final class GpuLightGeometry {
 
         private void invalidateOpaque(int x, int y, int z) {
             opaqueKey = Long.MIN_VALUE;
-            opaqueMask = null;
+            opaqueSection = null;
             for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) for (int dz = -1; dz <= 1; dz++)
                 opaqueSections.remove(SectionPos.asLong(x + dx, y + dy, z + dz));
         }
@@ -560,31 +606,30 @@ public final class GpuLightGeometry {
             if (level.isOutsideBuildHeight(pos)) return false;
             long key = SectionPos.asLong(pos);
             if (key != opaqueKey) {
-                opaqueMask = opaqueSections.getAndMoveToLast(key);
-                if (opaqueMask == null) {
+                opaqueSection = opaqueSections.getAndMoveToLast(key);
+                if (opaqueSection == null) {
+                    LevelChunkSection section = section(key);
+                    opaqueSection = section == null || section.hasOnlyAir() ? EMPTY_OPACITY : new OpacitySection(section);
                     if (opaqueSections.size() >= 512) opaqueSections.removeFirst();
-                    opaqueMask = new long[128];
-                    opaqueSections.put(key, opaqueMask);
+                    opaqueSections.put(key, opaqueSection);
                 }
                 opaqueKey = key;
             }
+            long[] mask = opaqueSection.mask;
+            if (mask == null) return false;
             int cell = (pos.getY() & 15) << 8 | (pos.getZ() & 15) << 4 | pos.getX() & 15, word = cell >> 6;
             long bit = 1L << cell;
-            if ((opaqueMask[word] & bit) == 0) {
-                boolean full = opaqueModel(pos);
-                opaqueMask[word] |= bit;
-                if (full) opaqueMask[word + 64] |= bit;
+            if ((mask[word] & bit) == 0) {
+                BlockState state = opaqueSection.blocks.getBlockState(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15);
+                if (opaqueModel(pos, state)) mask[word + 64] |= bit;
+                mask[word] |= bit;
             }
-            return (opaqueMask[word + 64] & bit) != 0;
+            return (mask[word + 64] & bit) != 0;
         }
 
         /** Only proven unit-cube models with no transparent texels may close the work volume. */
-        private boolean opaqueModel(BlockPos pos) {
-            if (level.isOutsideBuildHeight(pos)) return false;
-            LevelChunk chunk = chunk(pos.getX() >> 4, pos.getZ() >> 4);
-            if (chunk == null) return false;
-            BlockState state = chunk.getBlockState(pos);
-            if (state.hasBlockEntity() || state.getBlock().hasDynamicShape()
+        private boolean opaqueModel(BlockPos pos, BlockState state) {
+            if (state.isAir() || state.hasBlockEntity() || state.getBlock().hasDynamicShape()
                     || !state.isSolidRender(level, pos) || !state.isCollisionShapeFullBlock(level, pos)
                     || state.getOffset(level, pos).lengthSqr() != 0) return false;
             Boolean known = opaqueStates.get(state);
@@ -659,6 +704,8 @@ public final class GpuLightGeometry {
         final long generation;
         final BlockPos origin;
         final FloatArrayList surface = new FloatArrayList(), caster = new FloatArrayList();
+        final Vector3d plane = new Vector3d();
+        final int[] surfaceEnds = new int[PARTS];
         final Map<Long, Span> casterBlocks = new HashMap<>();
         final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         final BlockPos.MutableBlockPos neighbor = new BlockPos.MutableBlockPos();
@@ -692,51 +739,61 @@ public final class GpuLightGeometry {
         }
 
         void advance(int budget) {
-            for (int end = Math.min(4096, cursor + budget); cursor < end && !tooLarge; cursor++) {
-                int x = cursor & 15, z = cursor >> 4 & 15, y = cursor >> 8;
-                pos.set(origin.getX() + x, origin.getY() + y, origin.getZ() + z);
-                BlockState state = blocks.getBlockState(x, y, z);
-                if (state.isAir()) continue;
-                if (state.getRenderShape() != RenderShape.MODEL) {
-                    int start = caster.size() / STRIDE;
-                    for (AABB box : state.getCollisionShape(cache.level, pos, CollisionContext.empty()).toAabbs()) {
-                        if (surface.size() + caster.size() + 36 * STRIDE > MAX_SECTION_FLOATS) {
+            int end = Math.min(4096, cursor + budget);
+            while (cursor < end && !tooLarge) {
+                int part = cursor / PART_SIZE;
+                int partEnd = Math.min(end, (part + 1) * PART_SIZE);
+                for (; cursor < partEnd && !tooLarge; cursor++) advanceBlock(part);
+                surfaceEnds[part] = surface.size();
+            }
+        }
+
+        private void advanceBlock(int part) {
+            int x = (cursor & 7) + (part & 1) * 8;
+            int z = (cursor >> 3 & 7) + (part >> 1 & 1) * 8;
+            int y = (cursor >> 6 & 7) + (part >> 2) * 8;
+            pos.set(origin.getX() + x, origin.getY() + y, origin.getZ() + z);
+            BlockState state = blocks.getBlockState(x, y, z);
+            if (state.isAir()) return;
+            if (state.getRenderShape() != RenderShape.MODEL) {
+                int start = caster.size() / STRIDE;
+                for (AABB box : state.getCollisionShape(cache.level, pos, CollisionContext.empty()).toAabbs()) {
+                    if (surface.size() + caster.size() + 36 * STRIDE > MAX_SECTION_FLOATS) {
+                        tooLarge = true;
+                        break;
+                    }
+                    box(caster, x + box.minX, y + box.minY, z + box.minZ,
+                            x + box.maxX, y + box.maxY, z + box.maxZ);
+                }
+                if (caster.size() / STRIDE > start) {
+                    casterBlocks.put(pos.asLong(), new Span(start, caster.size() / STRIDE - start));
+                }
+            } else {
+                var model = Minecraft.getInstance().getBlockRenderer().getBlockModel(state);
+                boolean general = !cache.culled(model);
+                int visible = 0;
+                for (Direction side : DIRECTIONS) {
+                    neighbor.setWithOffset(pos, side);
+                    if (Block.shouldRenderFace(state, cache.level, pos, side, neighbor)) visible |= 1 << side.get3DDataValue();
+                }
+                if (visible == 0 && !general) return;
+                Vec3 offset = state.getOffset(cache.level, pos).add(x, y, z);
+                for (int side = 0; side <= 6; side++) {
+                    if (side == 6 ? !general : (visible & 1 << side) == 0) continue;
+                    for (BakedQuad quad : LightModelSnapshots.quads(cache.level, pos, state,
+                            side == 6 ? null : Direction.from3DDataValue(side))) {
+                        if (surface.size() + caster.size() + TRIANGLES.length * STRIDE > MAX_SECTION_FLOATS) {
                             tooLarge = true;
                             break;
                         }
-                        box(caster, x + box.minX, y + box.minY, z + box.minZ,
-                                x + box.maxX, y + box.maxY, z + box.maxZ);
+                        int tint = quad.isTinted() ? Minecraft.getInstance().getBlockColors()
+                                .getColor(state, cache.level, pos, quad.getTintIndex()) : 0xFFFFFF;
+                        append(surface, quad, offset, tint, plane);
                     }
-                    if (caster.size() / STRIDE > start) {
-                        casterBlocks.put(pos.asLong(), new Span(start, caster.size() / STRIDE - start));
-                    }
-                } else {
-                    var model = Minecraft.getInstance().getBlockRenderer().getBlockModel(state);
-                    boolean general = !cache.culled(model);
-                    int visible = 0;
-                    for (Direction side : DIRECTIONS) {
-                        neighbor.setWithOffset(pos, side);
-                        if (Block.shouldRenderFace(state, cache.level, pos, side, neighbor)) visible |= 1 << side.get3DDataValue();
-                    }
-                    if (visible == 0 && !general) continue;
-                    Vec3 offset = state.getOffset(cache.level, pos).add(x, y, z);
-                    for (int side = 0; side <= 6; side++) {
-                        if (side == 6 ? !general : (visible & 1 << side) == 0) continue;
-                        for (BakedQuad quad : LightModelSnapshots.quads(cache.level, pos, state,
-                                side == 6 ? null : Direction.from3DDataValue(side))) {
-                            if (surface.size() + caster.size() + TRIANGLES.length * STRIDE > MAX_SECTION_FLOATS) {
-                                tooLarge = true;
-                                break;
-                            }
-                            int tint = quad.isTinted() ? Minecraft.getInstance().getBlockColors()
-                                    .getColor(state, cache.level, pos, quad.getTintIndex()) : 0xFFFFFF;
-                            append(surface, quad, offset, tint);
-                        }
-                        if (tooLarge) break;
-                    }
+                    if (tooLarge) break;
                 }
-                if (surface.size() + caster.size() > MAX_SECTION_FLOATS) tooLarge = true;
             }
+            if (surface.size() + caster.size() > MAX_SECTION_FLOATS) tooLarge = true;
         }
     }
 
@@ -772,7 +829,7 @@ public final class GpuLightGeometry {
         return true;
     }
 
-    private static void append(FloatArrayList out, BakedQuad quad, Vec3 offset, int tint) {
+    private static void append(FloatArrayList out, BakedQuad quad, Vec3 offset, int tint, Vector3d plane) {
         int[] data = quad.getVertices();
         int first = IQuadTransformer.POSITION;
         double ax = Float.intBitsToFloat(data[first + IQuadTransformer.STRIDE]) - Float.intBitsToFloat(data[first]);
@@ -789,7 +846,7 @@ public final class GpuLightGeometry {
         float normalY = length < 1e-12 ? facing.getStepY() : (float) (ny / length * sign);
         float normalZ = length < 1e-12 ? facing.getStepZ() : (float) (nz / length * sign);
         for (int triangle = 0; triangle < TRIANGLES.length; triangle += 3) {
-            Vec3 plane = triangleNormal(data, TRIANGLES[triangle], TRIANGLES[triangle + 1], TRIANGLES[triangle + 2]);
+            triangleNormal(data, TRIANGLES[triangle], TRIANGLES[triangle + 1], TRIANGLES[triangle + 2], plane);
             for (int corner = 0; corner < 3; corner++) {
                 int base = TRIANGLES[triangle + corner] * IQuadTransformer.STRIDE;
                 for (int axis = 0; axis < 3; axis++) out.add((float) (Float.intBitsToFloat(data[base + IQuadTransformer.POSITION + axis])
@@ -811,7 +868,7 @@ public final class GpuLightGeometry {
         }
     }
 
-    private static Vec3 triangleNormal(int[] vertices, int a, int b, int c) {
+    private static void triangleNormal(int[] vertices, int a, int b, int c, Vector3d plane) {
         int ia = a * IQuadTransformer.STRIDE + IQuadTransformer.POSITION;
         int ib = b * IQuadTransformer.STRIDE + IQuadTransformer.POSITION;
         int ic = c * IQuadTransformer.STRIDE + IQuadTransformer.POSITION;
@@ -823,7 +880,8 @@ public final class GpuLightGeometry {
         double bz = Float.intBitsToFloat(vertices[ic + 2]) - Float.intBitsToFloat(vertices[ia + 2]);
         double x = ay * bz - az * by, y = az * bx - ax * bz, z = ax * by - ay * bx;
         double length = Math.sqrt(x * x + y * y + z * z);
-        return length < 1e-12 ? Vec3.ZERO : new Vec3(x / length, y / length, z / length);
+        if (length < 1e-12) plane.zero();
+        else plane.set(x / length, y / length, z / length);
     }
 
     private static void box(FloatArrayList out, double x0, double y0, double z0, double x1, double y1, double z1) {

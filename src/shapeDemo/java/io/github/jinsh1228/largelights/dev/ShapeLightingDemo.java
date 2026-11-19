@@ -70,10 +70,12 @@ public final class ShapeLightingDemo {
     private static final int FLOOR = 150;
     private static final boolean GPU_TRIAL = Boolean.getBoolean("createLargeLights.gpuDemo");
     private static final boolean PERFORMANCE = Boolean.getBoolean("createLargeLights.gpuDemo.performance");
+    private static final String SCENE = System.getProperty("createLargeLights.gpuDemo.scene", "room");
+    private static final int SPREAD = SCENE.equals("dense") ? 16 : 80;
     private static final boolean FIELD_DEMO = Boolean.getBoolean("createLargeLights.fieldDemo");
     private static final boolean VERTICAL = "vertical".equals(System.getProperty("createLargeLights.gpuDemo.angle", "oblique"));
     private static final BlockPos LIGHT = new BlockPos(0, FLOOR + Integer.getInteger("createLargeLights.gpuDemo.height", PERFORMANCE ? 60 : GPU_TRIAL ? 24 : 8), GPU_TRIAL && VERTICAL ? 5 : -10);
-    private static final BlockPos CONSOLE = new BlockPos(16, FLOOR + 1, -9);
+    private static final BlockPos CONSOLE = new BlockPos(16, SCENE.equals("outdoor") ? LIGHT.getY() - 8 : FLOOR + 1, -9);
     private static final BlockPos FIELD_TEST = new BlockPos(0, FLOOR + 40, 0);
     private static final BlockPos VANILLA_TEST = FIELD_TEST.offset(0, 0, -24);
     private static final BlockPos[] SYNC_POINTS = {
@@ -201,6 +203,7 @@ public final class ShapeLightingDemo {
         for (int x = minX; x <= maxX; x++) {
             for (int z = minZ; z <= maxZ; z++) {
                 level.setBlock(new BlockPos(x, FLOOR, z), Blocks.WHITE_CONCRETE.defaultBlockState(), Block.UPDATE_CLIENTS);
+                if (SCENE.equals("outdoor")) continue;
                 for (int y = FLOOR + 1; y < roof; y++) {
                     boolean edge = x == minX || x == maxX || z == minZ || z == maxZ;
                     level.setBlock(new BlockPos(x, y, z), edge ? wall : Blocks.AIR.defaultBlockState(),
@@ -318,7 +321,7 @@ public final class ShapeLightingDemo {
         group.colors[0] = 0x55CCFF;
         group.colorCycle = false;
         group.audio = false;
-        ConsoleSettings.setSpread(console, 0, 80);
+        ConsoleSettings.setSpread(console, 0, SPREAD);
         ConsoleSettings.setRealLight(console, 0, !GPU_TRIAL || PERFORMANCE);
         console.changed();
     }

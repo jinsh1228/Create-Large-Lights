@@ -58,6 +58,17 @@ final class LightTraversal {
                 empty = skip != 0;
                 shift = Math.max(2, skip);
                 gx = x >> shift; gy = y >> shift; gz = z >> shift;
+                if (skip == 4) {
+                    // Steps strictly inside an empty section commute. Preserve repeated additions and leave
+                    // boundary steps to the original tie order. The guard covers rounding in the exit estimate.
+                    double exitX = nx + tx * (ix < 0 ? x & 15 : 15 - (x & 15));
+                    double exitY = ny + ty * (iy < 0 ? y & 15 : 15 - (y & 15));
+                    double exitZ = nz + tz * (iz < 0 ? z & 15 : 15 - (z & 15));
+                    double inside = Math.min(1, Math.min(exitX, Math.min(exitY, exitZ))) - 1e-12;
+                    while (nx < inside) { x += ix; nx += tx; }
+                    while (ny < inside) { y += iy; ny += ty; }
+                    while (nz < inside) { z += iz; nz += tz; }
+                }
             }
             if (!empty && test.blocked(pos.set(x, y, z))) return false;
             if (nx > 1 && ny > 1 && nz > 1) return true;
